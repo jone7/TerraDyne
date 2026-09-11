@@ -1,5 +1,6 @@
 // Copyright (c) 2026 GregOrigin. All Rights Reserved.
 #include "World/TerraDyneOrchestrator.h"
+#include "TerraDyneModule.h"
 #include "Core/TerraDyneManager.h"
 #include "Core/TerraDyneSubsystem.h"
 #include "Core/TerraDyneEditController.h"
@@ -11,6 +12,7 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "Components/InputComponent.h"
+#include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -29,11 +31,15 @@ namespace
 	static constexpr int32 OVERLAY_KEY_AUX = 103;
 	static constexpr TCHAR SHOWCASE_BASELINE_SLOT[] = TEXT("TerraDyne_ShowcaseBaseline");
 	static constexpr TCHAR SHOWCASE_FALLBACK_TERRAIN_MATERIAL_PATH[] =
-		TEXT("/Game/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master");
+		TEXT("/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master");
 	static constexpr TCHAR SHOWCASE_SECONDARY_TERRAIN_MATERIAL_PATH[] =
 		TEXT("/Game/M_Metal_Terrain.M_Metal_Terrain");
+	static constexpr TCHAR SHOWCASE_WORLD_PRESET_PATH[] =
+		TEXT("/TerraDyne/Samples/Presets/DA_TerraDyne_ShowcaseWorld.DA_TerraDyne_ShowcaseWorld");
+	static constexpr TCHAR SHOWCASE_GRASS_PROFILE_PATH[] =
+		TEXT("/TerraDyne/Samples/Profiles/DA_TerraDyne_ShowcaseGrass.DA_TerraDyne_ShowcaseGrass");
 	static constexpr TCHAR TERRADYNE_MASTER_MATERIAL_PATH[] =
-		TEXT("/Game/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master");
+		TEXT("/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master");
 	static constexpr TCHAR BASIC_SHAPE_MATERIAL_PATH[] =
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial");
 
@@ -117,6 +123,7 @@ namespace
 			NormalizedPath.Contains(TEXT("mwlandscapeautomaterial")) ||
 			NormalizedPath.Contains(TEXT("landscapeautomaterial")) ||
 			NormalizedPath.Contains(TEXT("m_landscape")) ||
+			NormalizedPath.Contains(TEXT("m_landscape")) ||
 			NormalizedPath.Contains(TEXT("landscape_"));
 	}
 
@@ -151,6 +158,8 @@ namespace
 // ---------------------------------------------------------------------------
 static UStaticMesh* CreateRuntimeGrassBlade(UObject* Outer)
 {
+#if WITH_EDITOR
+	// Runtime UStaticMesh generation is only reliable in Editor builds
 	UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer);
 
 	UStaticMeshDescription* Desc = Mesh->CreateStaticMeshDescription();
@@ -204,13 +213,25 @@ static UStaticMesh* CreateRuntimeGrassBlade(UObject* Outer)
 	// Blade B: along Y axis (90 degrees)
 	AddQuad(FVector(0, -W, 0), FVector(0, W, 0), FVector(0, W*0.3f, H), FVector(0, -W*0.3f, H));
 
+	// Register material slot BEFORE Build so the polygon group name "GrassMat"
+	// resolves to a real StaticMaterial entry and Build can initialize its UVChannelData.
+	// Adding the slot afterwards leaves UVChannelData.bInitialized = false, which trips an
+	// engine ensure() when foliage/instancing systems read UV streams from the mesh.
+	Mesh->GetStaticMaterials().Add(FStaticMaterial(nullptr, FName(TEXT("GrassMat"))));
+
 	Mesh->BuildFromStaticMeshDescriptions({Desc});
 
-	// Register material slot
-	Mesh->GetStaticMaterials().SetNum(1);
-	Mesh->GetStaticMaterials()[0].MaterialSlotName = FName(TEXT("GrassMat"));
+#if WITH_EDITORONLY_DATA
+	// Defensive: rebuild UV-stream-density data even if Build did not.
+	Mesh->UpdateUVChannelData(false);
+#endif
 
 	return Mesh;
+#else
+	// In packaged builds, skip runtime mesh generation - use pre-authored assets instead
+	UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne: Runtime grass blade generation skipped in packaged build. Use pre-authored mesh assets."));
+	return LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+#endif
 }
 
 ATerraDyneOrchestrator::ATerraDyneOrchestrator()
@@ -293,11 +314,10 @@ int32 ATerraDyneOrchestrator::GetPhaseIndex(EShowcasePhase Phase) const
 {
 	return ShowcaseSequence.IndexOfByKey(Phase);
 }
-
 void ATerraDyneOrchestrator::BeginPlay()
 {
 	Super::BeginPlay();
-	UE_LOG(LogTemp, Log, TEXT("Showcase: Sequence Started"));
+	UE_LOG(LogTerraDyne, Log, TEXT("Showcase: Sequence Started"));
 
 	InitShowcaseSequence();
 	InitPhaseConfigs();
@@ -327,7 +347,7 @@ void ATerraDyneOrchestrator::BeginPlay()
 
 			if (!WidgetClass)
 			{
-				WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/TerraDyne/Blueprints/WBP_TerraDyneHUD.WBP_TerraDyneHUD_C"));
+				WidgetClass = LoadClass<UUserWidget>(nullptr, TEXT("/TerraDyne/UI/WBP_TerraDyneUI.WBP_TerraDyneUI_C"));
 			}
 
 			if (!WidgetClass)
@@ -356,12 +376,25 @@ void ATerraDyneOrchestrator::BeginPlay()
 		{
 			// Grab the existing one so we can read values from it
 			ActiveUI = FoundWidgets[0];
-			UE_LOG(LogTemp, Log, TEXT("Showcase: Connected to existing ToolWidget."));
+			UE_LOG(LogTerraDyne, Log, TEXT("Showcase: Connected to existing ToolWidget."));
 		}
 
 	}
 
-	RestartShowcase();
+	if (bInteractiveOnly)
+	{
+		ClearShowcaseTimers();
+		BindManagerEvents(GetManager());
+		
+		PhaseTimer = 0.0f;
+		ActionTimer = 0.0f;
+		CurrentPhase = EShowcasePhase::Interactive;
+		OnPhaseEnter(CurrentPhase);
+	}
+	else
+	{
+		RestartShowcase();
+	}
 }
 
 void ATerraDyneOrchestrator::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -423,6 +456,8 @@ void ATerraDyneOrchestrator::SetupInput()
 		EnableInput(PC);
 		if (InputComponent)
 		{
+			// TODO: Migrate to Enhanced Input System (UEnhancedInputComponent + UInputAction assets)
+			// Legacy input is retained for backward compatibility with existing projects.
 			InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ATerraDyneOrchestrator::OnLeftClickStart);
 			InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ATerraDyneOrchestrator::OnLeftClickStop);
 		}
@@ -521,7 +556,7 @@ void ATerraDyneOrchestrator::PerformToolAction()
 		FlattenHeight = LockedFlattenHeight;
 	}
 
-	Manager->ApplyGlobalBrush(Hit.Location, Radius, Strength, BrushMode, LayerIndex, FlattenHeight);
+	Manager->ApplyGlobalBrush(Hit.Location, Radius, Strength, BrushMode, Manager->ActiveLayer, LayerIndex, FlattenHeight);
 	DrawDebugSphere(GetWorld(), Hit.Location, Radius, 16, FColor::Green, false, -1.0f, 0, 2.0f);
 }
 
@@ -578,6 +613,12 @@ UTerraDyneWorldPreset* ATerraDyneOrchestrator::BuildFallbackPreset()
 {
 	if (ShowcasePreset)
 	{
+		return ShowcasePreset;
+	}
+
+	if (UTerraDyneWorldPreset* PackagedPreset = LoadObject<UTerraDyneWorldPreset>(nullptr, SHOWCASE_WORLD_PRESET_PATH))
+	{
+		ShowcasePreset = PackagedPreset;
 		return ShowcasePreset;
 	}
 
@@ -779,8 +820,8 @@ void ATerraDyneOrchestrator::SeedFallbackTerrain(ATerraDyneManager* Manager)
 
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
-		Manager->ApplyGlobalBrush(Origin + FVector(-1200.0f, 900.0f, 0.0f), 2300.0f, 1.0f, ETerraDyneBrushMode::Paint, 1);
-		Manager->ApplyGlobalBrush(Origin + FVector(1500.0f, -600.0f, 0.0f), 1800.0f, 1.0f, ETerraDyneBrushMode::Paint, 2);
+		Manager->ApplyGlobalBrush(Origin + FVector(-1200.0f, 900.0f, 0.0f), 2300.0f, 1.0f, ETerraDyneBrushMode::Paint, ETerraDyneLayer::Sculpt, 1);
+		Manager->ApplyGlobalBrush(Origin + FVector(1500.0f, -600.0f, 0.0f), 1800.0f, 1.0f, ETerraDyneBrushMode::Paint, ETerraDyneLayer::Sculpt, 2);
 	}
 }
 
@@ -911,10 +952,31 @@ void ATerraDyneOrchestrator::EnsureGrassProfile(ATerraDyneManager* Manager)
 	const float LayerPaintCoverage = MeasureShowcaseLayerPaintCoverage(Manager, GrassLayerIndex);
 	const float MinGrassWeight = LayerPaintCoverage >= 0.05f ? 0.18f : 0.0f;
 	UTerraDyneGrassProfile* Profile = Manager->ActiveGrassProfile;
-	const bool bShowcaseManagedProfile = Profile && Profile->GetOuter() == Manager;
+
+	auto IsPackagedShowcaseGrassProfile = [](const UTerraDyneGrassProfile* InProfile) -> bool
+	{
+		return InProfile && InProfile->GetPathName().Equals(SHOWCASE_GRASS_PROFILE_PATH, ESearchCase::IgnoreCase);
+	};
+
+	if (!Profile || Profile->Varieties.Num() == 0)
+	{
+		if (UTerraDyneGrassProfile* PackagedProfile = LoadObject<UTerraDyneGrassProfile>(nullptr, SHOWCASE_GRASS_PROFILE_PATH))
+		{
+			Profile = DuplicateObject<UTerraDyneGrassProfile>(PackagedProfile, Manager);
+			Manager->ActiveGrassProfile = Profile;
+		}
+	}
+	else if (IsPackagedShowcaseGrassProfile(Profile))
+	{
+		Profile = DuplicateObject<UTerraDyneGrassProfile>(Profile, Manager);
+		Manager->ActiveGrassProfile = Profile;
+	}
+
+	bool bShowcaseManagedProfile = Profile && Profile->GetOuter() == Manager;
 	if (!Profile || Profile->Varieties.Num() == 0)
 	{
 		Profile = NewObject<UTerraDyneGrassProfile>(Manager);
+		bShowcaseManagedProfile = true;
 
 		struct FGrassCandidate
 		{
@@ -923,26 +985,42 @@ void ATerraDyneOrchestrator::EnsureGrassProfile(ATerraDyneManager* Manager)
 			FVector2D ScaleRange;
 		};
 
-		static const FGrassCandidate Candidates[] = {
+		static const FGrassCandidate PackagedCandidates[] = {
+			{TEXT("/TerraDyne/Samples/Meshes/SM_TerraDyne_GrassA.SM_TerraDyne_GrassA"), 0.45f, FVector2D(0.8f, 1.1f)},
+			{TEXT("/TerraDyne/Samples/Meshes/SM_TerraDyne_GrassB.SM_TerraDyne_GrassB"), 0.25f, FVector2D(0.9f, 1.2f)},
+			{TEXT("/TerraDyne/Samples/Meshes/SM_TerraDyne_GrassC.SM_TerraDyne_GrassC"), 0.2f, FVector2D(0.7f, 1.0f)}
+		};
+
+		static const FGrassCandidate LegacyCandidates[] = {
 			{TEXT("/Game/MWLandscapeAutoMaterial/Meshes/Plants/SM_MWAM_GrassA.SM_MWAM_GrassA"), 0.45f, FVector2D(0.8f, 1.1f)},
 			{TEXT("/Game/MWLandscapeAutoMaterial/Meshes/Plants/SM_MWAM_GrassB.SM_MWAM_GrassB"), 0.25f, FVector2D(0.9f, 1.2f)},
 			{TEXT("/Game/MWLandscapeAutoMaterial/Meshes/Plants/SM_MWAM_GrassC.SM_MWAM_GrassC"), 0.2f, FVector2D(0.7f, 1.0f)}
 		};
 
-		for (const FGrassCandidate& Candidate : Candidates)
+		auto AddCandidateVarieties = [&](const FGrassCandidate* Candidates, int32 CandidateCount)
 		{
-			if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, Candidate.MeshPath))
+			for (int32 CandidateIndex = 0; CandidateIndex < CandidateCount; ++CandidateIndex)
 			{
-				FTerraDyneGrassVariety Variety;
-				Variety.GrassMesh = Mesh;
-				Variety.Density = Candidate.Density;
-				Variety.WeightLayerIndex = GrassLayerIndex;
-				Variety.MinWeight = MinGrassWeight;
-				Variety.ScaleRange = Candidate.ScaleRange;
-				Variety.bAlignToSurface = true;
-				Variety.MaxSlopeAngle = 55.0f;
-				Profile->Varieties.Add(Variety);
+				const FGrassCandidate& Candidate = Candidates[CandidateIndex];
+				if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, Candidate.MeshPath))
+				{
+					FTerraDyneGrassVariety Variety;
+					Variety.GrassMesh = Mesh;
+					Variety.Density = Candidate.Density;
+					Variety.WeightLayerIndex = GrassLayerIndex;
+					Variety.MinWeight = MinGrassWeight;
+					Variety.ScaleRange = Candidate.ScaleRange;
+					Variety.bAlignToSurface = true;
+					Variety.MaxSlopeAngle = 55.0f;
+					Profile->Varieties.Add(Variety);
+				}
 			}
+		};
+
+		AddCandidateVarieties(PackagedCandidates, UE_ARRAY_COUNT(PackagedCandidates));
+		if (Profile->Varieties.Num() == 0)
+		{
+			AddCandidateVarieties(LegacyCandidates, UE_ARRAY_COUNT(LegacyCandidates));
 		}
 
 		if (Profile->Varieties.Num() == 0)
@@ -969,7 +1047,8 @@ void ATerraDyneOrchestrator::EnsureGrassProfile(ATerraDyneManager* Manager)
 
 		Manager->ActiveGrassProfile = Profile;
 	}
-	else if (bShowcaseManagedProfile)
+
+	if (bShowcaseManagedProfile)
 	{
 		for (FTerraDyneGrassVariety& Variety : Profile->Varieties)
 		{
@@ -1392,27 +1471,31 @@ void ATerraDyneOrchestrator::AdvancePhase()
 	UndoRedoDemoStep = 0;
 	UndoRedoSubTimer = 0.0f;
 	CurrentPhase = GetNextPhase(CurrentPhase);
-	UE_LOG(LogTemp, Log, TEXT("SHOWCASE: Phase -> %d"), static_cast<int32>(CurrentPhase));
+	UE_LOG(LogTerraDyne, Log, TEXT("SHOWCASE: Phase -> %d"), static_cast<int32>(CurrentPhase));
 	OnPhaseEnter(CurrentPhase);
 }
 
 void ATerraDyneOrchestrator::OnPhaseEnter(EShowcasePhase Phase)
 {
 	ClearOverlay();
-	if (Phase == EShowcasePhase::Interactive)
+	
+	if (!bInteractiveOnly)
 	{
-		RestoreShowcaseBaseline();
-	}
-	EnsureShowcaseWorld();
+		if (Phase == EShowcasePhase::Interactive)
+		{
+			RestoreShowcaseBaseline();
+		}
+		EnsureShowcaseWorld();
 
-	const int32 PhaseIndex = GetPhaseIndex(Phase);
-	const int32 PhaseCount = ShowcaseSequence.Num();
-	if (const FShowcasePhaseConfig* Config = PhaseConfigs.Find(Phase))
-	{
-		SetOverlay(
-			FString::Printf(TEXT("[%d/%d] %s"), PhaseIndex + 1, PhaseCount, *Config->Title),
-			Config->Description
-		);
+		const int32 PhaseIndex = GetPhaseIndex(Phase);
+		const int32 PhaseCount = ShowcaseSequence.Num();
+		if (const FShowcasePhaseConfig* Config = PhaseConfigs.Find(Phase))
+		{
+			SetOverlay(
+				FString::Printf(TEXT("[%d/%d] %s"), PhaseIndex + 1, PhaseCount, *Config->Title),
+				Config->Description
+			);
+		}
 	}
 
 	UndoRedoDemoStep = 0;
@@ -1528,10 +1611,13 @@ void ATerraDyneOrchestrator::OnPhaseEnter(EShowcasePhase Phase)
 		if (ATerraDyneManager* ActiveManager = GetManager())
 		{
 			ActiveManager->bStreamingPaused = false;
-			if (APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0))
+			if (!bInteractiveOnly)
 			{
-				Pawn->SetActorLocation(ActiveManager->GetActorLocation() + FVector(-2600.0f, -2600.0f, 2200.0f));
-				Pawn->SetActorRotation(FRotator(-24.0f, 45.0f, 0.0f));
+				if (APawn* Pawn = UGameplayStatics::GetPlayerPawn(this, 0))
+				{
+					Pawn->SetActorLocation(ActiveManager->GetActorLocation() + FVector(-2600.0f, -2600.0f, 2200.0f));
+					Pawn->SetActorRotation(FRotator(-24.0f, 45.0f, 0.0f));
+				}
 			}
 		}
 		break;
@@ -1701,7 +1787,7 @@ void ATerraDyneOrchestrator::UpdateLayerDemo(float DeltaTime)
 	Man->ActiveLayer = LP.Layer;
 
 	const FVector Jitter(FMath::FRandRange(-120.0f, 120.0f), FMath::FRandRange(-120.0f, 120.0f), 0.0f);
-	Man->ApplyGlobalBrush(Man->GetActorLocation() + LP.Position + Jitter, 650.0f, 820.0f, ETerraDyneBrushMode::Raise);
+	Man->ApplyGlobalBrush(Man->GetActorLocation() + LP.Position + Jitter, 650.0f, 820.0f, ETerraDyneBrushMode::Raise, LP.Layer);
 
 	if (GEngine)
 	{
@@ -1746,7 +1832,7 @@ void ATerraDyneOrchestrator::UpdatePaintDemo(float DeltaTime)
 	const FPaintSubPhase& PP = SubPhases[SubIdx];
 
 	const FVector Jitter(FMath::FRandRange(-90.0f, 90.0f), FMath::FRandRange(-90.0f, 90.0f), 0.0f);
-	Man->ApplyGlobalBrush(Man->GetActorLocation() + PP.Position + Jitter, 780.0f, 1.0f, ETerraDyneBrushMode::Paint, PP.LayerIndex);
+	Man->ApplyGlobalBrush(Man->GetActorLocation() + PP.Position + Jitter, 780.0f, 1.0f, ETerraDyneBrushMode::Paint, ETerraDyneLayer::Sculpt, PP.LayerIndex);
 
 	if (GEngine)
 	{

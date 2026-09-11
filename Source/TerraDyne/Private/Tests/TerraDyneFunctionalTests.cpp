@@ -3,13 +3,67 @@
 #include "Misc/AutomationTest.h"
 #include "Core/TerraDyneManager.h"
 #include "World/TerraDyneChunk.h"
+#include "World/TerraDyneOrchestrator.h"
+#include "World/TerraDyneSceneSetup.h"
 #include "Components/DynamicMeshComponent.h"
 #include "GeometryScript/MeshQueryFunctions.h"
 #include "Engine/World.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/SkyLight.h"
 #include "Kismet/GameplayStatics.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/App.h"
 
 #if WITH_EDITOR
 #include "Tests/AutomationEditorCommon.h"
+
+namespace TerraDyneFunctionalTests
+{
+    class FWaitForTerrainMeshCommand final : public IAutomationLatentCommand
+    {
+    public:
+        FWaitForTerrainMeshCommand(FAutomationTestBase* InTest, ATerraDyneChunk* InChunk)
+            : Test(InTest)
+            , Chunk(InChunk)
+            , DeadlineSeconds(FPlatformTime::Seconds() + 10.0)
+        {
+        }
+
+        virtual bool Update() override
+        {
+            ATerraDyneChunk* ChunkPtr = Chunk.Get();
+            if (!ChunkPtr || !ChunkPtr->DynamicMeshComp)
+            {
+                Test->AddError(TEXT("Chunk was destroyed before its asynchronous terrain mesh completed."));
+                return true;
+            }
+
+            // Editor automation worlds are not guaranteed to tick actors. Drive the production
+            // async-result application path explicitly while the worker finishes.
+            static_cast<AActor*>(ChunkPtr)->Tick(0.05f);
+            if (ChunkPtr->DynamicMeshComp->GetDynamicMesh()->GetTriangleCount() > 0)
+            {
+                Test->TestTrue(
+                    TEXT("Collision should remain enabled after the terrain mesh is applied"),
+                    ChunkPtr->DynamicMeshComp->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+                return true;
+            }
+
+            if (FPlatformTime::Seconds() < DeadlineSeconds)
+            {
+                return false;
+            }
+
+            Test->AddError(TEXT("Timed out waiting for the asynchronous terrain mesh build."));
+            return true;
+        }
+
+    private:
+        FAutomationTestBase* Test = nullptr;
+        TWeakObjectPtr<ATerraDyneChunk> Chunk;
+        double DeadlineSeconds = 0.0;
+    };
+}
 
 // USP 1 & 3: Deformation & Physics Update
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneDeformationTest, "TerraDyne.Functional.Deformation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -30,23 +84,77 @@ bool FTerraDyneDeformationTest::RunTest(const FString& Parameters)
 
         TestNotNull("DynamicMeshComp should exist", Chunk->DynamicMeshComp.Get());
         
-        // Check Initial Vertices
-        int32 InitialVertexCount = 0;
-        if(Chunk->DynamicMeshComp && Chunk->DynamicMeshComp->GetDynamicMesh())
-        {
-             InitialVertexCount = Chunk->DynamicMeshComp->GetDynamicMesh()->GetTriangleCount();
-        }
-        TestTrue("Chunk should have triangles", InitialVertexCount > 0);
+        FVector EditPos(500.0f, 500.0f, 0.0f);
+        const float InitialHeight = Chunk->GetHeightAtLocation(EditPos);
 
         // 2. Deform
-        FVector EditPos(500.0f, 500.0f, 0.0f);
         // Apply a strong brush to ensure change
         Chunk->ApplyLocalIdempotentEdit(EditPos, 200.0f, 500.0f, ETerraDyneBrushMode::Raise);
 
+        const float UpdatedHeight = Chunk->GetHeightAtLocation(EditPos);
+
         // 3. Verify Change (USP 1)
-        // USP 3: Physics
-        TestTrue("Collision should be enabled", Chunk->DynamicMeshComp->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+        TestTrue("Height query should change after deformation", !FMath::IsNearlyEqual(InitialHeight, UpdatedHeight));
+        ADD_LATENT_AUTOMATION_COMMAND(TerraDyneFunctionalTests::FWaitForTerrainMeshCommand(this, Chunk));
     }
+
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneGPUBrushStateSyncTest, "TerraDyne.Functional.GPUBrushStateSync", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTerraDyneGPUBrushStateSyncTest::RunTest(const FString& Parameters)
+{
+    UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
+    TestNotNull("World should exist", World);
+    if (!World) return false;
+
+    ATerraDyneChunk* Chunk = World->SpawnActor<ATerraDyneChunk>();
+    TestNotNull("Chunk should spawn", Chunk);
+    if (!Chunk) return false;
+
+    Chunk->GridCoordinate = FIntPoint::ZeroValue;
+    Chunk->ChunkSizeWorldUnits = 2048.0f;
+    Chunk->WorldSize = 2048.0f;
+    Chunk->ZScale = 768.0f;
+    Chunk->Initialize(32, 2048.0f);
+
+    const bool bRenderResourcesExpected = FApp::CanEverRender() && !IsRunningDedicatedServer();
+    if (bRenderResourcesExpected)
+    {
+        TestNotNull("Height RT should be created on a render-capable runtime", Chunk->HeightRT.Get());
+    }
+    else
+    {
+        TestNull("Headless runtime should not allocate a height RT", Chunk->HeightRT.Get());
+    }
+
+    UTextureRenderTarget2D* PreviousHeightRT = Chunk->HeightRT.Get();
+    const FVector EditPos(0.0f, 0.0f, 0.0f);
+    const float InitialHeight = Chunk->GetHeightAtLocation(EditPos);
+    const int32 CenterIndex = (Chunk->Resolution / 2) * Chunk->Resolution + (Chunk->Resolution / 2);
+    const float InitialSample = Chunk->HeightBuffer.IsValidIndex(CenterIndex) ? Chunk->HeightBuffer[CenterIndex] : 0.0f;
+
+    Chunk->ApplyLocalIdempotentEdit(EditPos, 300.0f, 500.0f, ETerraDyneBrushMode::Raise);
+
+    const float UpdatedHeight = Chunk->GetHeightAtLocation(EditPos);
+    TestTrue("GPU brush should update CPU height queries immediately", !FMath::IsNearlyEqual(InitialHeight, UpdatedHeight));
+    TestTrue("GPU brush should update the CPU height buffer immediately",
+        Chunk->HeightBuffer.IsValidIndex(CenterIndex) && !FMath::IsNearlyEqual(InitialSample, Chunk->HeightBuffer[CenterIndex]));
+    if (Chunk->IsUsingGPU())
+    {
+        TestNotEqual("GPU brush should swap the active height RT", Chunk->HeightRT.Get(), PreviousHeightRT);
+    }
+    else
+    {
+        AddInfo(TEXT("GPU terrain path unavailable under the current automation RHI; CPU-authoritative synchronization was validated."));
+    }
+
+    const FTerraDyneChunkData SerializedData = Chunk->GetSerializedData();
+    TestTrue("Serialized height data should match the CPU height buffer after a GPU brush",
+        SerializedData.HeightData.IsValidIndex(CenterIndex) &&
+        Chunk->HeightBuffer.IsValidIndex(CenterIndex) &&
+        FMath::IsNearlyEqual(SerializedData.HeightData[CenterIndex], Chunk->HeightBuffer[CenterIndex], KINDA_SMALL_NUMBER));
 
     return true;
 }
@@ -81,6 +189,52 @@ bool FTerraDyneGridTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneGlobalNoiseTest, "TerraDyne.Functional.GlobalNoise", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTerraDyneGlobalNoiseTest::RunTest(const FString& Parameters)
+{
+    UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
+    TestNotNull("World should exist", World);
+    if (!World) return false;
+
+    ATerraDyneManager* Manager = World->SpawnActor<ATerraDyneManager>();
+    TestNotNull("Manager should spawn", Manager);
+    if (!Manager) return false;
+
+    Manager->GlobalChunkSize = 1000.0f;
+    Manager->ActiveLayer = ETerraDyneLayer::Detail;
+
+    ATerraDyneChunk* Chunk = World->SpawnActor<ATerraDyneChunk>();
+    TestNotNull("Chunk should spawn", Chunk);
+    if (!Chunk) return false;
+
+    Chunk->GridCoordinate = FIntPoint(0, 0);
+    Chunk->InitializeChunk(FIntPoint(0, 0), 1000.0f, 32, nullptr, nullptr);
+
+    const int32 NumSamples = Chunk->Resolution * Chunk->Resolution;
+    Chunk->BaseBuffer.Init(0.5f, NumSamples);
+    Chunk->SculptBuffer.Init(0.0f, NumSamples);
+    Chunk->DetailBuffer.Init(0.0f, NumSamples);
+    Chunk->HeightBuffer.Init(0.5f, NumSamples);
+    Chunk->RebuildPhysicsMesh();
+
+    Manager->RebuildChunkMap();
+    Manager->ApplyGlobalNoise(120.0f, 0.003f, 42.0f);
+
+    bool bDetailChanged = false;
+    bool bHeightChanged = false;
+    for (int32 Index = 0; Index < NumSamples; Index++)
+    {
+        bDetailChanged |= !FMath::IsNearlyZero(Chunk->DetailBuffer[Index]);
+        bHeightChanged |= !FMath::IsNearlyEqual(Chunk->HeightBuffer[Index], 0.5f);
+    }
+
+    TestTrue("ApplyGlobalNoise modifies the active detail layer", bDetailChanged);
+    TestTrue("ApplyGlobalNoise recomputes the combined height buffer", bHeightChanged);
+
+    return true;
+}
+
 // USP 5: Zero Config
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneSetupTest, "TerraDyne.Functional.ZeroConfig", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -103,6 +257,52 @@ bool FTerraDyneSetupTest::RunTest(const FString& Parameters)
     // Verify Stats (USP 5 part 2)
     FTerraDyneGPUStats Stats = Manager->GetGPUStats();
     TestTrue("Should detect GPU or Software", !Stats.ComputeBackend.IsEmpty());
+
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneSceneSetupRuntimeInitTest, "TerraDyne.Functional.SceneSetupRuntimeInit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTerraDyneSceneSetupRuntimeInitTest::RunTest(const FString& Parameters)
+{
+    UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
+    TestNotNull("World should exist", World);
+    if (!World) return false;
+
+    ATerraDyneSceneSetup* SceneSetup = World->SpawnActor<ATerraDyneSceneSetup>();
+    TestNotNull("Scene setup should spawn", SceneSetup);
+    if (!SceneSetup) return false;
+
+    SceneSetup->DemoTemplate = ETerraDyneDemoTemplate::SurvivalFramework;
+    SceneSetup->InitializeWorld();
+
+    TArray<AActor*> Managers;
+    UGameplayStatics::GetAllActorsOfClass(World, ATerraDyneManager::StaticClass(), Managers);
+    TestEqual("Scene setup should spawn one manager", Managers.Num(), 1);
+
+    TArray<AActor*> Orchestrators;
+    UGameplayStatics::GetAllActorsOfClass(World, ATerraDyneOrchestrator::StaticClass(), Orchestrators);
+    TestEqual("Scene setup should spawn one orchestrator", Orchestrators.Num(), 1);
+
+    TArray<AActor*> DirectionalLights;
+    UGameplayStatics::GetAllActorsOfClass(World, ADirectionalLight::StaticClass(), DirectionalLights);
+    TestTrue("Scene setup should ensure at least one directional light", DirectionalLights.Num() >= 1);
+
+    TArray<AActor*> SkyLights;
+    UGameplayStatics::GetAllActorsOfClass(World, ASkyLight::StaticClass(), SkyLights);
+    TestTrue("Scene setup should ensure at least one skylight", SkyLights.Num() >= 1);
+
+    if (Managers.Num() == 1)
+    {
+        ATerraDyneManager* Manager = Cast<ATerraDyneManager>(Managers[0]);
+        TestNotNull("Spawned manager should be valid", Manager);
+        if (Manager)
+        {
+            TestTrue("Survival template should enable default chunk spawn on begin play", Manager->bSpawnDefaultChunksOnBeginPlay);
+            TestTrue("Survival template should enable default lighting on begin play", Manager->bSetupDefaultLightingOnBeginPlay);
+            TestFalse("Survival template should not auto-spawn showcase", Manager->bSpawnShowcaseOnBeginPlay);
+        }
+    }
 
     return true;
 }

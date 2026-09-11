@@ -5,6 +5,7 @@
 #include "World/TerraDyneTileData.h"
 #include "Core/TerraDyneSaveGame.h"
 #include "Grass/TerraDyneGrassTypes.h"
+#include "Engine/World.h"
 
 #if WITH_EDITOR
 #include "Tests/AutomationEditorCommon.h"
@@ -38,7 +39,7 @@ bool FTerraDynePaintWeightTest::RunTest(const FString& Parameters)
 	// Apply paint brush at chunk centre to layer 1
 	const int32 TargetLayer = 1;
 	Chunk->ApplyLocalIdempotentEdit(FVector::ZeroVector, 300.f, 5000.f,
-		ETerraDyneBrushMode::Paint, TargetLayer);
+		ETerraDyneBrushMode::Paint, ETerraDyneLayer::Sculpt, TargetLayer);
 
 	// Layer 1 must have some non-zero values; other layers must remain zero
 	float SumLayer1 = 0.f;
@@ -76,7 +77,7 @@ bool FTerraDyneWeightRoundTripTest::RunTest(const FString& Parameters)
 
 	// Paint layer 2 at the centre
 	Source->ApplyLocalIdempotentEdit(FVector::ZeroVector, 400.f, 5000.f,
-		ETerraDyneBrushMode::Paint, 2);
+		ETerraDyneBrushMode::Paint, ETerraDyneLayer::Sculpt, 2);
 
 	// Serialize
 	FTerraDyneChunkData Data = Source->GetSerializedData();

@@ -71,6 +71,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Showcase")
 	void StartPersistenceTest();
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Showcase")
+	bool bInteractiveOnly = false;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

@@ -9,6 +9,9 @@
 #include "TerraDyneEditController.generated.h"
 
 class UTerraDyneToolWidget;
+class UTerraDyneReplicationComponent;
+class UDecalComponent;
+class UMaterialInstanceDynamic;
 
 UCLASS()
 class TERRADYNE_API ATerraDyneEditController : public APlayerController
@@ -20,6 +23,23 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "TerraDyne|UI")
 	TSubclassOf<UTerraDyneToolWidget> UIClass;
+
+	// Safe play-mode switch: when disabled, TerraDyne skips spawning the tool UI and also
+	// suppresses edit-mode cursor/input/brush preview so the controller behaves like gameplay.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|UI", meta = (DisplayName = "Enable Play Mode Tool UI"))
+	bool bEnablePlayModeToolUI = true;
+
+	/** Safe-by-default gate for client-originated terrain RPCs. Enable only on an authorized controller class. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "TerraDyne|Multiplayer")
+	bool bAllowRemoteTerrainEditing = false;
+
+	/** Reusable state-transfer bridge. Projects may add this component to their own PlayerController instead. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "TerraDyne|Multiplayer")
+	TObjectPtr<UTerraDyneReplicationComponent> TerraDyneReplication;
+
+	/** Project authorization hook, evaluated on the server after structural/rate/distance validation. */
+	UFUNCTION(BlueprintNativeEvent, BlueprintAuthorityOnly, Category = "TerraDyne|Multiplayer")
+	bool IsRemoteTerrainEditAuthorized(const FTerraDyneBrushParams& Params) const;
 
 	// Called from STerraDynePanel (Task 6) and keyboard binding
 	void OnUndoPressed();
@@ -41,8 +61,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_Redo();
 
-	/** Server → Owning Client: send a single chunk's full data for late-join sync. */
-	UFUNCTION(Client, Reliable)
+	/** Deprecated local compatibility helper. Network state now uses TerraDyneReplication fragments. */
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Multiplayer",
+		meta = (DeprecatedFunction, DeprecationMessage = "Use UTerraDyneReplicationComponent fragmented state transfer."))
 	void Client_ReceiveChunkSync(const FTerraDyneChunkData& Data);
 
 protected:
@@ -71,12 +92,22 @@ private:
 	bool bShowDebugCursor;
 	FVector LastValidHitLocation;
 
+	// Brush Preview Decal
+	UPROPERTY(Transient)
+	TObjectPtr<UDecalComponent> BrushDecal;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> BrushDecalMID;
+
 	// Flatten tool state — height locked on press-begin, cleared on release
 	bool bFlattenHeightLocked;
 	float LockedFlattenHeight;
 
 	// Stroke tracking for undo/redo
 	bool bStrokeBegun = false;
+	float AvailableBrushRequestTokens = -1.0f;
+	double LastBrushTokenRefillSeconds = 0.0;
+	double LastBrushRejectionLogSeconds = -1000000.0;
 
 	// Input Handlers
 	void OnLeftClickStart();
@@ -86,4 +117,10 @@ private:
 	// Helpers
 	bool GetTerrainHit(FHitResult& OutHit);
 	void PerformToolAction(const FVector& Location);
+	bool ConsumeBrushRequestToken();
+	bool ValidateRemoteBrushRequest(
+		const FTerraDyneBrushParams& Params,
+		class ATerraDyneManager* Manager,
+		FString& OutReason);
+	void LogRejectedBrushRequest(const FString& Reason);
 };

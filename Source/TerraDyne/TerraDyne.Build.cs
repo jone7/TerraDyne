@@ -20,7 +20,7 @@ public class TerraDyne : ModuleRules
 			"RHI",
 			"GeometryCore",
 			"UMG",
-			"VirtualHeightfieldMesh"
+			"Projects"
 		});
 
 		// Plugin dependencies (Must be enabled in .uproject)

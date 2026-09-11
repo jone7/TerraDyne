@@ -1,0 +1,2832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TerraDyne Manual // v0.4.1</title>
+    <meta name="description" content="TerraDyne 0.4.1 manual for runtime world conversion, terrain editing, persistence, streaming, gameplay framework integration, packaged samples, and Fab-ready builds.">
+    <link rel="icon" type="image/png" href="Resources/Icon128.png">
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #07111d;
+            --bg-soft: #0d1724;
+            --bg-strong: #122235;
+            --panel: rgba(13, 23, 36, 0.92);
+            --panel-strong: rgba(18, 34, 53, 0.96);
+            --panel-muted: rgba(9, 18, 30, 0.82);
+            --border: rgba(110, 147, 187, 0.18);
+            --border-strong: rgba(110, 147, 187, 0.3);
+            --text: #ecf4ff;
+            --text-soft: #b8c7d9;
+            --text-dim: #89a0bb;
+            --accent: #53d7ff;
+            --accent-strong: #3fb6ff;
+            --warm: #ff9a4f;
+            --warm-soft: #ffb26d;
+            --ok: #64dd8e;
+            --warn: #ffd166;
+            --danger: #ff7272;
+            --shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+            --radius-lg: 24px;
+            --radius-md: 16px;
+            --radius-sm: 10px;
+            --content-width: 1180px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            background:
+                radial-gradient(circle at top right, rgba(83, 215, 255, 0.12), transparent 26%),
+                radial-gradient(circle at top left, rgba(255, 154, 79, 0.08), transparent 22%),
+                linear-gradient(180deg, #07111d 0%, #08131f 45%, #06111c 100%);
+            color: var(--text-soft);
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: #89ebff;
+        }
+
+        img {
+            max-width: 100%;
+            display: block;
+        }
+
+        code,
+        pre,
+        kbd {
+            font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 310px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 28px 22px;
+            background: linear-gradient(180deg, rgba(8, 18, 31, 0.98), rgba(7, 15, 27, 0.94));
+            border-right: 1px solid var(--border);
+            overflow: auto;
+        }
+
+        .brand {
+            display: grid;
+            grid-template-columns: 56px minmax(0, 1fr);
+            gap: 14px;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .brand-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border-strong);
+            box-shadow: var(--shadow);
+        }
+
+        .brand h1 {
+            margin: 0;
+        }
+
+        .brand-copy {
+            display: flex;
+            align-items: center;
+            min-height: 56px;
+        }
+
+        .brand-copy p {
+            margin: 0;
+            font-size: 0.86rem;
+            line-height: 1.35;
+            color: var(--text-dim);
+        }
+
+        .wordmark {
+            margin: 0 0 22px;
+            padding: 16px 14px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(19, 35, 53, 0.75), rgba(9, 18, 30, 0.55));
+            border: 1px solid var(--border);
+        }
+
+        .wordmark img {
+            width: 100%;
+            height: auto;
+        }
+
+        .status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 34px;
+            padding: 0 12px;
+            border-radius: 999px;
+            background: rgba(20, 37, 57, 0.9);
+            border: 1px solid var(--border);
+            color: var(--text-soft);
+            font-size: 0.82rem;
+            line-height: 1;
+            white-space: nowrap;
+        }
+
+        .chip strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .sidebar-section {
+            margin-top: 24px;
+        }
+
+        .sidebar-title {
+            margin: 0 0 10px;
+            font-size: 0.76rem;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.08em;
+        }
+
+        .nav {
+            display: grid;
+            gap: 4px;
+        }
+
+        .nav a {
+            display: block;
+            padding: 10px 12px;
+            border-radius: 10px;
+            color: var(--text-soft);
+            border: 1px solid transparent;
+            font-size: 0.95rem;
+        }
+
+        .nav a:hover,
+        .nav a.active {
+            background: rgba(83, 215, 255, 0.08);
+            border-color: rgba(83, 215, 255, 0.18);
+            color: var(--text);
+        }
+
+        .sidebar-note {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 16px;
+            background: rgba(12, 25, 40, 0.82);
+            border: 1px solid var(--border);
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
+        .sidebar-note strong {
+            color: var(--text);
+        }
+
+        .content-wrap {
+            min-width: 0;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            padding: 18px 32px;
+            backdrop-filter: blur(14px);
+            background: rgba(7, 17, 29, 0.82);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .breadcrumbs {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.92rem;
+            color: var(--text-dim);
+        }
+
+        .breadcrumbs strong {
+            color: var(--text);
+        }
+
+        .top-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .button-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-height: 44px;
+            padding: 0 16px 0 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(122, 156, 194, 0.24);
+            background:
+                linear-gradient(180deg, rgba(25, 43, 64, 0.78), rgba(10, 20, 32, 0.88));
+            color: var(--text);
+            font-size: 0.9rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            position: relative;
+            overflow: hidden;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .button-link::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0));
+            pointer-events: none;
+        }
+
+        .button-link::after {
+            content: "";
+            position: absolute;
+            inset: auto -28px -28px auto;
+            width: 72px;
+            height: 72px;
+            border-radius: 999px;
+            background: radial-gradient(circle, rgba(83, 215, 255, 0.18), transparent 68%);
+            pointer-events: none;
+            opacity: 0.75;
+        }
+
+        .button-link:hover {
+            color: var(--text);
+            background:
+                linear-gradient(180deg, rgba(36, 58, 84, 0.86), rgba(14, 27, 42, 0.94));
+            border-color: rgba(122, 156, 194, 0.38);
+            transform: translateY(-1px);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.07),
+                0 10px 24px rgba(0, 0, 0, 0.22);
+        }
+
+        .button-link .button-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 24px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .button-link.button-fab .button-icon {
+            background: rgba(255, 154, 79, 0.16);
+            border-color: rgba(255, 154, 79, 0.24);
+            color: #ffd7b8;
+        }
+
+        .button-link.button-fab::after {
+            background: radial-gradient(circle, rgba(255, 154, 79, 0.22), transparent 68%);
+        }
+
+        .button-link.button-discord .button-icon {
+            background: rgba(83, 215, 255, 0.16);
+            border-color: rgba(83, 215, 255, 0.24);
+            color: #d4f7ff;
+        }
+
+        .button-link.button-brand .button-icon {
+            background: rgba(100, 221, 142, 0.14);
+            border-color: rgba(100, 221, 142, 0.22);
+            color: #d8ffe2;
+        }
+
+        .button-link .button-text {
+            position: relative;
+            z-index: 1;
+        }
+
+        main {
+            width: min(var(--content-width), calc(100vw - 310px));
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 0 32px 120px;
+        }
+
+        section {
+            padding: 70px 0;
+            border-top: 1px solid rgba(110, 147, 187, 0.12);
+        }
+
+        section:first-child {
+            border-top: 0;
+            padding-top: 42px;
+        }
+
+        .section-header {
+            max-width: 860px;
+            margin-bottom: 32px;
+        }
+
+        .eyebrow {
+            margin: 0 0 12px;
+            color: var(--accent);
+            font-size: 0.86rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        h1,
+        h2,
+        h3 {
+            margin: 0;
+            color: var(--text);
+            line-height: 1.12;
+            font-weight: 700;
+        }
+
+        h1 {
+            font-size: 3rem;
+        }
+
+        h2 {
+            font-size: 2.2rem;
+            margin-bottom: 10px;
+        }
+
+        h3 {
+            font-size: 1.25rem;
+            margin-bottom: 10px;
+        }
+
+        p {
+            margin: 0 0 16px;
+            line-height: 1.72;
+            font-size: 1rem;
+        }
+
+        .lead {
+            font-size: 1.14rem;
+            color: var(--text);
+            line-height: 1.74;
+        }
+
+        .muted {
+            color: var(--text-dim);
+        }
+
+        .hero-grid,
+        .split-grid,
+        .diagram-grid,
+        .comparison-grid,
+        .code-grid,
+        .example-grid,
+        .card-grid,
+        .metrics-grid,
+        .trouble-grid {
+            display: grid;
+            gap: 24px;
+        }
+
+        .hero-grid {
+            grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+            align-items: center;
+        }
+
+        .split-grid,
+        .diagram-grid,
+        .comparison-grid,
+        .code-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .card-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .metrics-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .example-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .trouble-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .hero-media {
+            position: relative;
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            min-height: 560px;
+            background:
+                radial-gradient(circle at 22% 24%, rgba(83, 215, 255, 0.18), transparent 28%),
+                radial-gradient(circle at 80% 20%, rgba(255, 154, 79, 0.14), transparent 26%),
+                linear-gradient(160deg, rgba(26, 48, 72, 0.96), rgba(9, 18, 30, 0.96));
+            border: 1px solid var(--border-strong);
+            box-shadow: var(--shadow);
+        }
+
+        .hero-media::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(rgba(126, 162, 202, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(126, 162, 202, 0.08) 1px, transparent 1px);
+            background-size: 34px 34px;
+            opacity: 0.32;
+            pointer-events: none;
+        }
+
+        .hero-media::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 34%),
+                linear-gradient(0deg, rgba(4, 9, 16, 0.42), rgba(4, 9, 16, 0.12));
+            pointer-events: none;
+        }
+
+        .hero-wordmark {
+            position: absolute;
+            top: 42px;
+            left: 42px;
+            z-index: 3;
+            width: min(430px, calc(100% - 84px));
+            padding: 14px 18px 16px;
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(10, 18, 29, 0.8), rgba(10, 18, 29, 0.58));
+            border: 1px solid rgba(122, 156, 194, 0.16);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                0 18px 40px rgba(0, 0, 0, 0.22);
+            backdrop-filter: blur(8px);
+        }
+
+        .hero-wordmark img {
+            width: min(100%, 320px);
+            height: auto;
+            margin-bottom: 8px;
+            filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.18));
+        }
+
+        .hero-wordmark span {
+            display: block;
+            color: var(--text-soft);
+            font-size: 0.98rem;
+            line-height: 1.55;
+            letter-spacing: 0;
+            text-transform: none;
+            max-width: 28ch;
+        }
+
+        .hero-stage {
+            position: absolute;
+            inset: 24px;
+            border-radius: 30px;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at 50% 42%, rgba(83, 215, 255, 0.12), transparent 32%),
+                linear-gradient(180deg, rgba(10, 19, 30, 0.38), rgba(10, 19, 30, 0.62));
+            border: 1px solid rgba(122, 156, 194, 0.2);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.06),
+                0 20px 46px rgba(0, 0, 0, 0.22);
+        }
+
+        .hero-stage::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background:
+                linear-gradient(140deg, rgba(255, 255, 255, 0.05), transparent 22%),
+                radial-gradient(circle at 16% 72%, rgba(83, 215, 255, 0.16), transparent 20%),
+                radial-gradient(circle at 86% 24%, rgba(255, 154, 79, 0.16), transparent 18%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .hero-stage::after {
+            content: "";
+            position: absolute;
+            inset: auto 0 0 0;
+            height: 28%;
+            background: linear-gradient(180deg, rgba(6, 12, 19, 0), rgba(6, 12, 19, 0.54));
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .hero-logo-art {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center center;
+            transform: scale(1.01);
+            opacity: 0.94;
+            filter: saturate(1.05) contrast(1.03);
+        }
+
+        .highlight-list {
+            margin: 26px 0 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
+            gap: 12px;
+        }
+
+        .highlight-list li {
+            display: grid;
+            grid-template-columns: 18px minmax(0, 1fr);
+            gap: 12px;
+            align-items: start;
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: rgba(11, 22, 35, 0.68);
+            border: 1px solid var(--border);
+        }
+
+        .highlight-list li::before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            margin-top: 7px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+            box-shadow: 0 0 18px rgba(83, 215, 255, 0.5);
+        }
+
+        .card,
+        .figure,
+        .callout,
+        .code-panel,
+        .table-wrap,
+        .timeline,
+        .resource-block {
+            background: linear-gradient(180deg, var(--panel), var(--panel-muted));
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+        }
+
+        .card,
+        .callout,
+        .code-panel,
+        .resource-block {
+            padding: 20px;
+        }
+
+        .card h3,
+        .callout h3,
+        .resource-block h3 {
+            margin-bottom: 8px;
+        }
+
+        .card p:last-child,
+        .callout p:last-child,
+        .resource-block p:last-child {
+            margin-bottom: 0;
+        }
+
+        .capability-tag {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 999px;
+            background: rgba(83, 215, 255, 0.08);
+            color: var(--accent);
+            font-size: 0.8rem;
+            margin-bottom: 10px;
+        }
+
+        .metric {
+            padding: 18px 16px;
+            border-radius: 16px;
+            background: rgba(13, 24, 38, 0.8);
+            border: 1px solid var(--border);
+        }
+
+        .metric strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 1.8rem;
+            line-height: 1;
+            color: var(--text);
+        }
+
+        .metric span {
+            color: var(--text-soft);
+            font-size: 0.92rem;
+            line-height: 1.5;
+        }
+
+        .release-ribbon {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+            margin-top: 26px;
+        }
+
+        .release-tile {
+            position: relative;
+            min-height: 142px;
+            padding: 18px;
+            border-radius: 16px;
+            overflow: hidden;
+            background:
+                linear-gradient(180deg, rgba(17, 32, 50, 0.9), rgba(9, 18, 30, 0.82));
+            border: 1px solid var(--border);
+        }
+
+        .release-tile::after {
+            content: "";
+            position: absolute;
+            width: 130px;
+            height: 130px;
+            right: -42px;
+            bottom: -58px;
+            border-radius: 999px;
+            background: radial-gradient(circle, rgba(83, 215, 255, 0.16), transparent 68%);
+            pointer-events: none;
+        }
+
+        .release-tile strong {
+            display: block;
+            color: var(--text);
+            font-size: 1.2rem;
+            margin-bottom: 8px;
+        }
+
+        .release-tile span {
+            position: relative;
+            z-index: 1;
+            display: block;
+            color: var(--text-soft);
+            line-height: 1.55;
+            font-size: 0.94rem;
+        }
+
+        .figure {
+            padding: 22px;
+            box-shadow: var(--shadow);
+        }
+
+        .figure h3 {
+            margin-bottom: 14px;
+        }
+
+        .figure p {
+            margin-bottom: 18px;
+        }
+
+        .figure svg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .callout {
+            border-color: rgba(83, 215, 255, 0.28);
+        }
+
+        .callout.warn {
+            border-color: rgba(255, 209, 102, 0.35);
+        }
+
+        .callout.danger {
+            border-color: rgba(255, 114, 114, 0.36);
+        }
+
+        .callout strong {
+            color: var(--text);
+        }
+
+        .callout ul,
+        .card ul {
+            margin: 14px 0 0;
+            padding-left: 18px;
+            line-height: 1.7;
+        }
+
+        .table-wrap {
+            overflow: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 760px;
+        }
+
+        th,
+        td {
+            padding: 14px 16px;
+            text-align: left;
+            vertical-align: top;
+            border-bottom: 1px solid rgba(110, 147, 187, 0.14);
+            line-height: 1.6;
+        }
+
+        th {
+            color: var(--text);
+            font-size: 0.92rem;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        td strong {
+            color: var(--text);
+        }
+
+        .code-panel pre {
+            margin: 0;
+            padding: 18px;
+            overflow: auto;
+            border-radius: 14px;
+            background: #09131f;
+            border: 1px solid rgba(110, 147, 187, 0.14);
+            color: #cde8ff;
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+
+        .inline-code {
+            padding: 2px 6px;
+            border-radius: 6px;
+            background: rgba(83, 215, 255, 0.08);
+            border: 1px solid rgba(83, 215, 255, 0.12);
+            color: #b8f4ff;
+            font-size: 0.92em;
+        }
+
+        .steps {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
+            gap: 14px;
+        }
+
+        .steps li {
+            display: grid;
+            grid-template-columns: 44px minmax(0, 1fr);
+            gap: 16px;
+            align-items: start;
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: rgba(11, 22, 35, 0.62);
+            border: 1px solid var(--border);
+        }
+
+        .step-num {
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, rgba(83, 215, 255, 0.18), rgba(63, 182, 255, 0.1));
+            border: 1px solid rgba(83, 215, 255, 0.22);
+            color: var(--text);
+            font-weight: 700;
+        }
+
+        .state-compare {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .state-box {
+            padding: 18px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: rgba(11, 22, 35, 0.68);
+        }
+
+        .state-box h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .state-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 999px;
+            display: inline-block;
+        }
+
+        .state-dot.on {
+            background: var(--ok);
+            box-shadow: 0 0 18px rgba(100, 221, 142, 0.35);
+        }
+
+        .state-dot.off {
+            background: var(--warm);
+            box-shadow: 0 0 18px rgba(255, 154, 79, 0.3);
+        }
+
+        .state-box ul {
+            margin: 12px 0 0;
+            padding-left: 18px;
+            line-height: 1.7;
+        }
+
+        .timeline {
+            padding: 22px;
+        }
+
+        .timeline-track {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .timeline-step {
+            position: relative;
+            padding: 16px;
+            border-radius: 14px;
+            background: rgba(11, 22, 35, 0.72);
+            border: 1px solid var(--border);
+            min-height: 180px;
+        }
+
+        .timeline-step::after {
+            content: "";
+            position: absolute;
+            top: 30px;
+            right: -16px;
+            width: 16px;
+            height: 2px;
+            background: linear-gradient(90deg, rgba(83, 215, 255, 0.5), rgba(255, 154, 79, 0.45));
+        }
+
+        .timeline-step:last-child::after {
+            display: none;
+        }
+
+        .timeline-step strong {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text);
+            font-size: 1rem;
+        }
+
+        .resource-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .resource-block ul {
+            margin: 12px 0 0;
+            padding-left: 18px;
+        }
+
+        .footer {
+            padding: 38px 0 0;
+            color: var(--text-dim);
+            font-size: 0.92rem;
+        }
+
+        .footer strong {
+            color: var(--text);
+        }
+
+        @media (max-width: 1240px) {
+            .card-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .metrics-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .example-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .release-ribbon {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 1080px) {
+            .layout {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .sidebar {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--border);
+            }
+
+            .topbar {
+                padding: 16px 22px;
+            }
+
+            main {
+                width: 100%;
+                padding: 0 22px 110px;
+            }
+
+            .hero-grid,
+            .split-grid,
+            .diagram-grid,
+            .comparison-grid,
+            .code-grid,
+            .state-compare,
+            .timeline-track,
+            .trouble-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .timeline-step::after {
+                display: none;
+            }
+
+            .hero-media {
+                min-height: 620px;
+            }
+
+            .hero-wordmark {
+                width: min(420px, calc(100% - 72px));
+                top: 36px;
+                left: 36px;
+            }
+
+            .hero-stage {
+                inset: 22px;
+            }
+        }
+
+        @media (max-width: 720px) {
+            h1 {
+                font-size: 2.3rem;
+            }
+
+            h2 {
+                font-size: 1.8rem;
+            }
+
+            .topbar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .top-actions,
+            .status-strip,
+            .nav {
+                width: 100%;
+            }
+
+            .sidebar {
+                padding: 24px 16px;
+                width: 100vw;
+                max-width: 100vw;
+                min-width: 0;
+                overflow-x: hidden;
+            }
+
+            .wordmark {
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .wordmark img {
+                width: min(100%, 300px);
+                max-width: 300px;
+                height: auto;
+            }
+
+            .status-strip {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .status-strip .chip:last-child {
+                grid-column: 1 / -1;
+            }
+
+            .chip {
+                width: 100%;
+                min-width: 0;
+                flex: 1 1 auto;
+                max-width: 100%;
+                white-space: normal;
+                line-height: 1.25;
+                padding-top: 8px;
+                padding-bottom: 8px;
+            }
+
+            .inline-code,
+            .release-tile span {
+                overflow-wrap: anywhere;
+            }
+
+            .button-link {
+                flex: 1 1 auto;
+            }
+
+            .card-grid,
+            .metrics-grid,
+            .example-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero-media {
+                min-height: 560px;
+            }
+
+            .hero-wordmark {
+                top: 28px;
+                left: 28px;
+                width: min(320px, calc(100% - 56px));
+                padding: 12px 14px 14px;
+            }
+
+            .hero-wordmark img {
+                width: min(100%, 250px);
+            }
+
+            .hero-stage {
+                inset: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="wordmark">
+                <img src="https://gregorigin.com/LOGOS/TerraDyneLine.png" alt="TerraDyne wordmark" loading="lazy" onerror="this.onerror=null;this.src='Resources/TerraDyneLine.png';">
+            </div>
+
+            <div class="brand">
+                <div class="brand-icon">
+                    <img src="Resources/Icon128.png" alt="TerraDyne icon" loading="lazy" onerror="this.onerror=null;this.src='https://gregorigin.com/LOGOS/logotransp.png';">
+                </div>
+                <div class="brand-copy">
+                    <p>Manual for the runtime world framework branch.</p>
+                </div>
+            </div>
+
+            <div class="status-strip">
+                <span class="chip"><strong>Version</strong> 0.4.1</span>
+                <span class="chip"><strong>Source</strong> UE 5.7</span>
+                <span class="chip"><strong>Fab builds</strong> UE 5.5-5.7</span>
+            </div>
+
+            <div class="sidebar-section">
+                <p class="sidebar-title">Manual Sections</p>
+                <nav class="nav" id="doc-nav">
+                    <a href="#overview" data-nav>Overview</a>
+                    <a href="#install" data-nav>Install and Setup</a>
+                    <a href="#wizard" data-nav>Setup Wizard</a>
+                    <a href="#conversion" data-nav>Landscape Conversion</a>
+                    <a href="#editing" data-nav>Runtime Editing</a>
+                    <a href="#persistence" data-nav>Persistence</a>
+                    <a href="#framework" data-nav>World Framework</a>
+                    <a href="#performance" data-nav>Performance and Chunks</a>
+                    <a href="#api" data-nav>API Reference</a>
+                    <a href="#examples" data-nav>Examples and Content</a>
+                    <a href="#troubleshooting" data-nav>Troubleshooting</a>
+                    <a href="#support" data-nav>Support and Release Notes</a>
+                </nav>
+            </div>
+
+            
+            <div class="sidebar-note">
+                <strong>Positioning:</strong> TerraDyne is an advanced runtime world framework for survival, sandbox, and open-world games built on authored Unreal Landscapes. It assumes UE5 fluency and some C++ familiarity for custom integration.
+            </div>
+        </aside>
+
+        <div class="content-wrap">
+            <div class="topbar">
+                <div class="breadcrumbs">
+                    <span>TerraDyne</span>
+                    <span>/</span>
+                    <strong id="active-section">Overview</strong>
+                </div>
+                <div class="top-actions">
+                    <a class="button-link button-fab" href="https://www.fab.com/listings/20f72d71-9737-4ac1-bce5-034eca166529">
+                        <span class="button-icon">F</span>
+                        <span class="button-text">View on Fab</span>
+                    </a>
+                    <a class="button-link button-discord" href="https://discord.gg/nqYQ5mtmHb">
+                        <span class="button-icon">D</span>
+                        <span class="button-text">Discord Support</span>
+                    </a>
+                    <a class="button-link button-brand" href="https://www.gregorigin.com">
+                        <span class="button-icon">G</span>
+                        <span class="button-text">GregOrigin</span>
+                    </a>
+                </div>
+            </div>
+
+            <main>
+                <section id="overview">
+                    <div class="hero-grid">
+                        <div>
+                            <p class="eyebrow">TerraDyne Manual</p>
+                            <h1>🎨 Persistent runtime world framework for authored Unreal Landscapes</h1>
+                            <p class="lead">
+                                TerraDyne converts a shipped-quality Unreal Landscape into a chunked, persistent, runtime-editable world without moving your game to a voxel stack. It keeps authored terrain workflows, adds runtime sculpting and paint, preserves world state, and exposes gameplay hooks for procedural extension, AI, building rules, and PCG.
+                            </p>
+                            <p>
+                                This manual targets <span class="inline-code">TerraDyne 0.4.1</span>. It covers the new first-run Survival Framework defaults, packaged sample meshes/presets/profiles, Blueprint and C++ integration examples, demo-map warning cleanup, and Fab-ready packaging for UE 5.5, 5.6, and 5.7.
+                            </p>
+
+                            <ul class="highlight-list">
+                                <li>
+                                    <div>
+                                        <strong>Authored world conversion first</strong><br>
+                                        Import height, paint layers, placed foliage, and actor foliage from existing landscape content, then continue editing at runtime.
+                                    </div>
+                                </li>
+                                <li>
+                                    <div>
+                                        <strong>Gameplay-facing persistence</strong><br>
+                                        Save terrain, migrated foliage state, procedural metadata, persistent actors, build permissions, AI zones, and runtime population rules.
+                                    </div>
+                                </li>
+                                <li>
+                                    <div>
+                                        <strong>Sample-backed first run</strong><br>
+                                        The recommended first-run path now applies packaged TerraDyne sample content instead of relying on project-local placeholder meshes or legacy <span class="inline-code">/Game/...</span> assets.
+                                    </div>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="hero-media">
+                            <div class="hero-wordmark">
+                                <img src="https://gregorigin.com/LOGOS/TerraDyneLine.png" alt="TerraDyne wordmark" loading="lazy" onerror="this.onerror=null;this.src='Resources/TerraDyneLine.png';">
+                                <span>Convert authored Unreal Landscapes into a persistent runtime world layer for sandbox, survival, and open-world gameplay.</span>
+                            </div>
+                            <div class="hero-stage">
+                                <img class="hero-logo-art" src="https://gregorigin.com/LOGOS/TerraDyneLogo.jpg" alt="TerraDyne visual identity" loading="lazy" onerror="this.onerror=null;this.src='Resources/TerraDyneLogo.jpg';">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="callout warn" style="margin-top: 28px;">
+                        <h3>❗ Important usage disclaimer</h3>
+                        <p>
+                            TerraDyne is not a beginner-friendly, drop-in asset. Productive use assumes a good grasp of UE5 project structure, actors, materials, input, runtime systems, and some C++ familiarity, especially when integrating custom survival, PCG, replication, persistence, or world-partition workflows. Exposure to the FOSS GitHub version is recommended before deep production integration.
+                        </p>
+                    </div>
+
+                    <div class="metrics-grid" style="margin-top: 34px;">
+                        <div class="metric">
+                            <strong>0.4.1</strong>
+                            <span>Release-facing manual now matches the packaged sample content, first-run defaults, integration examples, and Fab packaging metadata.</span>
+                        </div>
+                        <div class="metric">
+                            <strong>23/23</strong>
+                            <span>TerraDyne automation tests passed after the sample asset checks, first-run defaults, and integration example coverage.</span>
+                        </div>
+                        <div class="metric">
+                            <strong>3 Zips</strong>
+                            <span>Fab-ready source packages were produced for <span class="inline-code">UE5.5</span>, <span class="inline-code">UE5.6</span>, and <span class="inline-code">UE5.7</span>.</span>
+                        </div>
+                        <div class="metric">
+                            <strong>0 Map Issues</strong>
+                            <span><span class="inline-code">DemoMap_Showcase</span> live-load validation stayed clear of TerraDyne and map diagnostics.</span>
+                        </div>
+                    </div>
+
+                    <div class="diagram-grid" style="margin-top: 34px;">
+                        <div class="figure">
+                            <h3>🕸️ System map</h3>
+                            <p>TerraDyne sits between authored landscape content and the runtime systems that need reliable terrain ownership.</p>
+                            <svg viewBox="0 0 920 420" role="img" aria-label="TerraDyne system map diagram">
+                                <defs>
+                                    <linearGradient id="aqua" x1="0%" x2="100%" y1="0%" y2="100%">
+                                        <stop offset="0%" stop-color="#53d7ff"/>
+                                        <stop offset="100%" stop-color="#3fb6ff"/>
+                                    </linearGradient>
+                                    <linearGradient id="amber" x1="0%" x2="100%" y1="0%" y2="100%">
+                                        <stop offset="0%" stop-color="#ffb26d"/>
+                                        <stop offset="100%" stop-color="#ff8a3d"/>
+                                    </linearGradient>
+                                </defs>
+
+                                <rect x="40" y="74" width="220" height="270" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                                <text x="74" y="120" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Authored Inputs</text>
+                                <text x="74" y="156" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Landscape height</text>
+                                <text x="74" y="188" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Paint layers</text>
+                                <text x="74" y="220" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Placed foliage</text>
+                                <text x="74" y="252" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Actor foliage</text>
+                                <text x="74" y="284" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Level metadata</text>
+
+                                <rect x="346" y="54" width="236" height="310" rx="28" fill="#112233" stroke="rgba(83,215,255,0.34)" stroke-width="2"/>
+                                <text x="396" y="110" fill="#ecf4ff" font-size="28" font-family="Inter, Arial, sans-serif">TerraDyne</text>
+                                <rect x="386" y="138" width="156" height="38" rx="12" fill="url(#aqua)" opacity="0.18" stroke="rgba(83,215,255,0.28)"/>
+                                <text x="410" y="163" fill="#ecf4ff" font-size="17" font-family="Inter, Arial, sans-serif">Chunk conversion</text>
+                                <rect x="386" y="190" width="156" height="38" rx="12" fill="url(#aqua)" opacity="0.18" stroke="rgba(83,215,255,0.28)"/>
+                                <text x="412" y="215" fill="#ecf4ff" font-size="17" font-family="Inter, Arial, sans-serif">Runtime editing</text>
+                                <rect x="386" y="242" width="156" height="38" rx="12" fill="url(#amber)" opacity="0.18" stroke="rgba(255,154,79,0.28)"/>
+                                <text x="419" y="267" fill="#ecf4ff" font-size="17" font-family="Inter, Arial, sans-serif">Persistence</text>
+                                <rect x="386" y="294" width="156" height="38" rx="12" fill="url(#amber)" opacity="0.18" stroke="rgba(255,154,79,0.28)"/>
+                                <text x="412" y="319" fill="#ecf4ff" font-size="17" font-family="Inter, Arial, sans-serif">Gameplay hooks</text>
+
+                                <rect x="662" y="74" width="220" height="270" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                                <text x="700" y="120" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Runtime Outputs</text>
+                                <text x="700" y="156" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Persistent chunks</text>
+                                <text x="700" y="188" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Biome overlays</text>
+                                <text x="700" y="220" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Population rules</text>
+                                <text x="700" y="252" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">AI / build zones</text>
+                                <text x="700" y="284" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">PCG seed points</text>
+
+                                <line x1="260" y1="208" x2="346" y2="208" stroke="rgba(83,215,255,0.56)" stroke-width="4"/>
+                                <line x1="582" y1="208" x2="662" y2="208" stroke="rgba(255,154,79,0.5)" stroke-width="4"/>
+                                <polygon points="338,200 346,208 338,216" fill="#53d7ff"/>
+                                <polygon points="654,200 662,208 654,216" fill="#ff9a4f"/>
+                            </svg>
+                        </div>
+
+                        <div class="card-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+                            <div class="card">
+                                <div class="capability-tag">Author once</div>
+                                <h3>⛰️ Keep the landscape workflow</h3>
+                                <p>
+                                    The practical value is not replacing Unreal Landscape with a brand-new editor. It is taking a landscape you already trust and handing runtime ownership to TerraDyne.
+                                </p>
+                            </div>
+
+                            <div class="card">
+                                <div class="capability-tag">Runtime authority</div>
+                                <h3>👑 Manager owns the world state</h3>
+                                <p>
+                                    Chunk lookup, edit replication, save/load, gameplay metadata, and population management are centralized on <span class="inline-code">ATerraDyneManager</span>.
+                                </p>
+                            </div>
+
+                            <div class="card">
+                                <div class="capability-tag">Framework layer</div>
+                                <h3>🌍 Terrain is only the base layer</h3>
+                                <p>
+                                    The product now includes presets, spawn rules, biome metadata, AI zones, build permissions, runtime notifications, and PCG-facing queries.
+                                </p>
+                            </div>
+
+                            <div class="card">
+                                <div class="capability-tag">First-run assets</div>
+                                <h3>🧪 Samples are packaged with the plugin</h3>
+                                <p>
+                                    <span class="inline-code">/TerraDyne/Samples</span> now contains sample grass meshes, a grass material, a grass profile, and a showcase world preset that the wizard, scene setup, and demo map can use directly.
+                                </p>
+                            </div>
+
+                            <div class="card">
+                                <div class="capability-tag">Integration layer</div>
+                                <h3>📝 Small examples show project wiring</h3>
+                                <p>
+                                    Survival setup, PCG seed export, and authoritative replication bridges now exist as C++ example actors and Blueprint assets under <span class="inline-code">/TerraDyne/Examples</span>.
+                                </p>
+                            </div>
+
+                            <div class="card">
+                                <div class="capability-tag">Production focus</div>
+                                <h3>✅ Best fit</h3>
+                                <p>
+                                    Survival games, sandbox builders, persistent open-world projects, authored maps that need runtime deformation, and hybrid worlds that extend beyond the original footprint.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="install">
+                    <div class="section-header">
+                        <p class="eyebrow">Install and Setup</p>
+                        <h2>📦 Install the plugin as a world framework, not as a loose utility</h2>
+                        <p class="lead">
+                            TerraDyne ships as a runtime plugin with content, resources, shaders, and editor tools. Treat it like a proper plugin dependency in your project structure.
+                        </p>
+                    </div>
+
+                    <div class="split-grid">
+                        <div class="resource-block">
+                            <h3>📋 Requirements</h3>
+                            <ul>
+                                <li>Current source branch targets <span class="inline-code">Unreal Engine 5.7</span>.</li>
+                                <li>Fab-ready 0.4.1 packages are maintained for <span class="inline-code">UE 5.7</span>, <span class="inline-code">UE 5.6</span>, and <span class="inline-code">UE 5.5</span>.</li>
+                                <li>The plugin descriptor enables <span class="inline-code">GeometryScripting</span> and <span class="inline-code">VirtualHeightfieldMesh</span>.</li>
+                                <li>Runtime module allow list: <span class="inline-code">Win64</span>, <span class="inline-code">Mac</span>, <span class="inline-code">Linux</span>, <span class="inline-code">Android</span>, <span class="inline-code">IOS</span>.</li>
+                                <li>Official support URL: <a href="https://discord.gg/nqYQ5mtmHb">https://discord.gg/nqYQ5mtmHb</a>.</li>
+                                <li>Official docs URL: <a href="https://gregorigin.com/Terradyne">https://gregorigin.com/Terradyne</a>.</li>
+                            </ul>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>💡 Recommended project shape</h3>
+                            <div class="code-panel" style="padding: 0; margin-top: 14px;">
+                                <pre>MyProject/
+  Plugins/
+    TerraDyne/
+      Config/FilterPlugin.ini
+      Content/
+        Examples/
+        Maps/
+        Samples/
+        Scripts/
+      Resources/
+        Icon128.png
+      Shaders/
+      Source/
+      docs/
+      TerraDyne.uplugin</pre>
+                            </div>
+                            <p style="margin-top: 14px;">
+                                If your gameplay code needs TerraDyne APIs, add the dependency in your module build rules:
+                            </p>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>PublicDependencyModuleNames.AddRange(new string[] { "TerraDyne" });</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-grid" style="margin-top: 24px;">
+                        <div class="card">
+                            <div class="capability-tag">Project settings</div>
+                            <h3>🌎 Global defaults live in developer settings</h3>
+                            <p>
+                                Open <span class="inline-code">Edit &gt; Project Settings &gt; TerraDyne Settings</span> to configure master material path, HUD widget path, default chunk size, default resolution, LOD threshold, collision debounce, streaming radii, undo depth, and runtime notifications.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Input assumptions</div>
+                            <h3>⛏️ Editing controller expects TerraDyne actions</h3>
+                            <p>
+                                The runtime edit controller validates the action <span class="inline-code">TerraDyneClick</span> at startup. If you use TerraDyne editing in your own game mode, make input mappings part of your setup checklist rather than an afterthought.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Self-contained assets</div>
+                            <h3>📁 Do not point defaults at project-only content unless intended</h3>
+                            <p>
+                                The current plugin branch is built to avoid depending on <span class="inline-code">/Game/...</span> defaults. Preserve that if you extend it, especially for Fab or reusable project templates.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="figure" style="margin-top: 28px;">
+                        <h3>🔹 Fab package shape</h3>
+                        <p>The submitted zip is source-first and isolated. It contains a host-project folder only as a plugin container; it deliberately omits <span class="inline-code">HostProject.uproject</span>, <span class="inline-code">Binaries</span>, and <span class="inline-code">Intermediate</span>.</p>
+                        <svg viewBox="0 0 1160 390" role="img" aria-label="Fab package folder layout diagram">
+                            <rect x="44" y="44" width="292" height="302" rx="26" fill="#0c1725" stroke="rgba(110,147,187,0.26)"/>
+                            <text x="84" y="88" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Zip root</text>
+                            <text x="84" y="126" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">HostProject/</text>
+                            <text x="112" y="164" fill="#b8c7d9" font-size="18" font-family="Inter, Arial, sans-serif">Plugins/</text>
+                            <text x="140" y="202" fill="#53d7ff" font-size="18" font-family="Inter, Arial, sans-serif">TerraDyne/</text>
+                            <text x="84" y="258" fill="#ff9a4f" font-size="16" font-family="Inter, Arial, sans-serif">No HostProject.uproject</text>
+                            <text x="84" y="286" fill="#ff9a4f" font-size="16" font-family="Inter, Arial, sans-serif">No Binaries/Intermediate</text>
+
+                            <line x1="336" y1="195" x2="442" y2="195" stroke="rgba(83,215,255,0.55)" stroke-width="4"/>
+                            <polygon points="434,187 442,195 434,203" fill="#53d7ff"/>
+
+                            <rect x="442" y="44" width="332" height="302" rx="26" fill="#102031" stroke="rgba(83,215,255,0.28)"/>
+                            <text x="484" y="88" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Required payload</text>
+                            <text x="484" y="128" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">TerraDyne.uplugin</text>
+                            <text x="484" y="158" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Config/FilterPlugin.ini</text>
+                            <text x="484" y="188" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Content, Resources, Scripts</text>
+                            <text x="484" y="218" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Shaders/TerraDyneSimulation.usf</text>
+                            <text x="484" y="248" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Source and docs</text>
+                            <text x="484" y="296" fill="#64dd8e" font-size="16" font-family="Inter, Arial, sans-serif">CanContainContent: true</text>
+
+                            <line x1="774" y1="195" x2="880" y2="195" stroke="rgba(255,154,79,0.5)" stroke-width="4"/>
+                            <polygon points="872,187 880,195 872,203" fill="#ff9a4f"/>
+
+                            <rect x="880" y="44" width="236" height="302" rx="26" fill="#0c1725" stroke="rgba(110,147,187,0.26)"/>
+                            <text x="920" y="88" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Outputs</text>
+                            <text x="920" y="130" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">UE5.7 zip</text>
+                            <text x="920" y="162" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">UE5.6 zip</text>
+                            <text x="920" y="194" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">UE5.5 zip</text>
+                            <text x="920" y="250" fill="#64dd8e" font-size="16" font-family="Inter, Arial, sans-serif">BuildPlugin -installed</text>
+                            <text x="920" y="278" fill="#64dd8e" font-size="16" font-family="Inter, Arial, sans-serif">Validator clean</text>
+                        </svg>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 26px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Settings category</th>
+                                    <th>Key fields</th>
+                                    <th>Why it matters</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Asset Paths</strong></td>
+                                    <td><span class="inline-code">MasterMaterialPath</span>, <span class="inline-code">HeightBrushMaterialPath</span>, <span class="inline-code">HUDWidgetPath</span></td>
+                                    <td>Sets the default runtime material and UI surfaces the manager and edit controller will try to use.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Defaults</strong></td>
+                                    <td><span class="inline-code">DefaultChunkSize</span>, <span class="inline-code">DefaultResolution</span></td>
+                                    <td>Defines the baseline chunk footprint and per-chunk fidelity before any landscape import overrides.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Performance</strong></td>
+                                    <td><span class="inline-code">LODDistanceThreshold</span>, <span class="inline-code">CollisionDebounceTime</span>, <span class="inline-code">GrassDebounceTime</span></td>
+                                    <td>Controls runtime cost after edits, especially in maps where players sculpt continuously.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Streaming</strong></td>
+                                    <td><span class="inline-code">ChunkLoadRadius</span>, <span class="inline-code">ChunkUnloadRadius</span>, <span class="inline-code">MaxChunkOpsPerTick</span>, <span class="inline-code">GridExtent</span></td>
+                                    <td>These settings define the active chunk envelope and the rate at which the manager is allowed to mutate the world.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Notifications</strong></td>
+                                    <td><span class="inline-code">bShowRuntimeNotifications</span></td>
+                                    <td>Lets runtime builds suppress on-screen notifications while editor builds still surface toasts for errors and warnings.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 26px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Descriptor field</th>
+                                    <th>0.4.1 value</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Version / VersionName</strong></td>
+                                    <td><span class="inline-code">401</span> / <span class="inline-code">0.4.1</span></td>
+                                    <td>Matches the Fab package name and changelog heading.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CreatedBy / CreatedByURL</strong></td>
+                                    <td><span class="inline-code">GregOrigin</span> / <span class="inline-code">www.gregorigin.com</span></td>
+                                    <td>Publisher metadata expected in the installed plugin descriptor.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>DocsURL / SupportURL</strong></td>
+                                    <td><span class="inline-code">https://gregorigin.com/Terradyne</span> / Discord support</td>
+                                    <td>Points users to the product documentation and live support channel.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>EngineVersion</strong></td>
+                                    <td><span class="inline-code">5.5.0</span>, <span class="inline-code">5.6.0</span>, or <span class="inline-code">5.7.0</span></td>
+                                    <td>Stamped per engine package during the clean BuildPlugin pass.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CanContainContent</strong></td>
+                                    <td><span class="inline-code">true</span></td>
+                                    <td>Required because TerraDyne ships maps, Blueprints, sample meshes, profiles, presets, scripts, resources, and shaders.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>PlatformAllowList</strong></td>
+                                    <td><span class="inline-code">Win64</span>, <span class="inline-code">Mac</span>, <span class="inline-code">Linux</span>, <span class="inline-code">Android</span>, <span class="inline-code">IOS</span></td>
+                                    <td>Applied to both runtime and editor modules for descriptor consistency.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section id="wizard">
+                    <div class="section-header">
+                        <p class="eyebrow">Setup Wizard</p>
+                        <h2>🛠️ Use the setup wizard to bootstrap the right kind of world</h2>
+                        <p class="lead">
+                            Open <span class="inline-code">Window &gt; TerraDyne Setup Wizard</span>. In 0.4.1 the wizard opens on <span class="inline-code">Survival Framework (Recommended First Run)</span> so a new user gets a packaged preset, grass profile, sample meshes, streaming defaults, biome overlays, AI zones, build zones, lighting, manager, and orchestrator without hunting for missing assets.
+                        </p>
+                    </div>
+
+                    <div class="card-grid">
+                        <div class="card">
+                            <div class="capability-tag">Recommended first run</div>
+                            <h3>⛺ Survival Framework</h3>
+                            <p>
+                                The default first-run path. It applies the packaged showcase world preset and grass profile, sets up practical streaming/procedural defaults, and seeds biome, AI-zone, and build-zone metadata that survival and sandbox projects naturally need.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Cinematic demo</div>
+                            <h3>✨ Full Feature Showcase</h3>
+                            <p>
+                                Demo-oriented setup with a guided tour of sculpting, painting, persistence, foliage, population, AI zones, build permissions, and PCG-relevant metadata. Use this for validation recordings and feature presentations.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Production import</div>
+                            <h3>🎨 Authored World Conversion</h3>
+                            <p>
+                                The most important template for real projects. It scans the level for landscape actors, exposes migration options, and converts the selected landscape into TerraDyne chunks.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Blank canvas</div>
+                            <h3>🏖️ Sandbox</h3>
+                            <p>
+                                Minimal startup for testing edit flow, materials, chunk settings, and low-friction experimentation. Good when you want TerraDyne actors present without importing a landscape or applying the survival-oriented defaults.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Wizard behavior</div>
+                            <h3>⛰️ Landscape detection stays in sync</h3>
+                            <p>
+                                The wizard refreshes its landscape list when maps open or change. If the authored conversion dropdown looks wrong, use <span class="inline-code">Refresh</span> after loading the correct level.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Practical note</div>
+                            <h3>🔹 Initialize World is opinionated</h3>
+                            <p>
+                                The wizard is designed to create or update TerraDyne bootstrap actors for the selected template. For first-run use, leave the Survival Framework defaults alone and validate the packaged sample profile before swapping in project-specific assets.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="figure" style="margin-top: 28px;">
+                        <h3>🔹 Wizard decision flow</h3>
+                        <p>Pick the template based on whether you already trust the source landscape or want TerraDyne to own the world from the beginning.</p>
+                        <svg viewBox="0 0 1220 340" role="img" aria-label="Wizard template decision flow">
+                            <rect x="24" y="122" width="230" height="96" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="72" y="164" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Start here</text>
+                            <text x="58" y="194" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">First-run default is survival</text>
+
+                            <line x1="254" y1="170" x2="364" y2="170" stroke="rgba(83,215,255,0.55)" stroke-width="4"/>
+                            <polygon points="356,162 364,170 356,178" fill="#53d7ff"/>
+
+                            <rect x="364" y="28" width="270" height="96" rx="24" fill="#102031" stroke="rgba(83,215,255,0.28)"/>
+                            <text x="418" y="70" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Survival Framework</text>
+                            <text x="410" y="100" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">Preset, profile, zones, streaming</text>
+
+                            <rect x="364" y="216" width="270" height="96" rx="24" fill="#102031" stroke="rgba(255,154,79,0.28)"/>
+                            <text x="432" y="258" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Existing landscape</text>
+                            <text x="416" y="288" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">Authored World Conversion</text>
+
+                            <line x1="634" y1="76" x2="774" y2="76" stroke="rgba(83,215,255,0.55)" stroke-width="4"/>
+                            <polygon points="766,68 774,76 766,84" fill="#53d7ff"/>
+                            <line x1="634" y1="264" x2="774" y2="264" stroke="rgba(255,154,79,0.5)" stroke-width="4"/>
+                            <polygon points="766,256 774,264 766,272" fill="#ff9a4f"/>
+
+                            <rect x="774" y="28" width="250" height="96" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="830" y="70" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Play immediately</text>
+                            <text x="812" y="100" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">Sample content is already bound</text>
+
+                            <rect x="774" y="216" width="250" height="96" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="816" y="258" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Migrate then build</text>
+                            <text x="814" y="288" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">Preserve authored content</text>
+
+                            <line x1="1024" y1="170" x2="1140" y2="170" stroke="rgba(110,147,187,0.4)" stroke-width="4"/>
+                            <polygon points="1132,162 1140,170 1132,178" fill="#89a0bb"/>
+
+                            <rect x="1140" y="122" width="80" height="96" rx="24" fill="#112233" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="1160" y="164" fill="#ecf4ff" font-size="19" font-family="Inter, Arial, sans-serif">Demo</text>
+                            <text x="1158" y="194" fill="#b8c7d9" font-size="14" font-family="Inter, Arial, sans-serif">Record</text>
+                        </svg>
+                    </div>
+
+                    <div class="figure" style="margin-top: 28px;">
+                        <h3>💡 What the recommended first run wires together</h3>
+                        <p>The stronger defaults are intentionally concrete: new users should see terrain ownership, grass, sample meshes, gameplay metadata, and framework hooks on the first clean map.</p>
+                        <svg viewBox="0 0 1200 360" role="img" aria-label="First-run Survival Framework asset wiring">
+                            <rect x="34" y="54" width="214" height="252" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.24)"/>
+                            <text x="72" y="98" fill="#ecf4ff" font-size="22" font-family="Inter, Arial, sans-serif">Wizard</text>
+                            <text x="72" y="132" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">Survival Framework</text>
+                            <text x="72" y="162" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">Recommended First Run</text>
+
+                            <line x1="248" y1="180" x2="342" y2="180" stroke="rgba(83,215,255,0.55)" stroke-width="4"/>
+                            <polygon points="334,172 342,180 334,188" fill="#53d7ff"/>
+
+                            <rect x="342" y="34" width="314" height="292" rx="28" fill="#102031" stroke="rgba(83,215,255,0.3)"/>
+                            <text x="392" y="82" fill="#ecf4ff" font-size="23" font-family="Inter, Arial, sans-serif">Packaged samples</text>
+                            <text x="388" y="124" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">DA_TerraDyne_ShowcaseWorld</text>
+                            <text x="388" y="156" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">DA_TerraDyne_ShowcaseGrass</text>
+                            <text x="388" y="188" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">SM_TerraDyne_GrassA/B/C</text>
+                            <text x="388" y="220" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">M_TerraDyne_GrassSample</text>
+                            <text x="388" y="264" fill="#64dd8e" font-size="15" font-family="Inter, Arial, sans-serif">No legacy /Game/MW dependency</text>
+
+                            <line x1="656" y1="180" x2="750" y2="180" stroke="rgba(255,154,79,0.52)" stroke-width="4"/>
+                            <polygon points="742,172 750,180 742,188" fill="#ff9a4f"/>
+
+                            <rect x="750" y="54" width="416" height="252" rx="28" fill="#0c1725" stroke="rgba(110,147,187,0.24)"/>
+                            <text x="804" y="98" fill="#ecf4ff" font-size="23" font-family="Inter, Arial, sans-serif">Runtime world</text>
+                            <text x="804" y="138" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">ATerraDyneManager + SceneSetup</text>
+                            <text x="804" y="170" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">Streaming/procedural defaults</text>
+                            <text x="804" y="202" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">Biome overlays, AI zones, build zones</text>
+                            <text x="804" y="234" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">PCG seed points and gameplay hooks</text>
+                            <text x="804" y="266" fill="#64dd8e" font-size="15" font-family="Inter, Arial, sans-serif">Ready to press Play</text>
+                        </svg>
+                    </div>
+
+                    <div class="callout warn" style="margin-top: 24px;">
+                        <h3>🔹 Practical recommendation</h3>
+                        <p>
+                            For a first run, use <span class="inline-code">Survival Framework</span>. For a production map that already has authored terrain, switch to <span class="inline-code">Authored World Conversion</span> after you have inspected the sample-backed defaults and understand what TerraDyne actors and assets are being created.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="conversion">
+                    <div class="section-header">
+                        <p class="eyebrow">Landscape Conversion</p>
+                        <h2>🏭 Authored World Conversion is the core production workflow</h2>
+                        <p class="lead">
+                            The conversion path imports loaded landscape components into TerraDyne chunks, captures weight-layer mappings, transfers placed foliage and actor foliage, optionally hides the source hierarchy, and preserves migration metadata on the manager for later save/load and gameplay queries.
+                        </p>
+                    </div>
+
+                    <div class="figure">
+                        <h3>🔹 Conversion pipeline</h3>
+                        <p>The current pipeline is deliberately defensive. It resolves the full landscape group, imports loaded components, warns when something critical is missing, and refuses obviously incompatible material adoption.</p>
+                        <svg viewBox="0 0 1320 340" role="img" aria-label="Landscape conversion pipeline diagram">
+                            <defs>
+                                <linearGradient id="flowA" x1="0%" x2="100%" y1="0%" y2="0%">
+                                    <stop offset="0%" stop-color="#53d7ff"/>
+                                    <stop offset="100%" stop-color="#3fb6ff"/>
+                                </linearGradient>
+                                <linearGradient id="flowB" x1="0%" x2="100%" y1="0%" y2="0%">
+                                    <stop offset="0%" stop-color="#ffb26d"/>
+                                    <stop offset="100%" stop-color="#ff8a3d"/>
+                                </linearGradient>
+                                <linearGradient id="flowMerge" x1="0%" x2="100%" y1="0%" y2="0%">
+                                    <stop offset="0%" stop-color="#53d7ff"/>
+                                    <stop offset="100%" stop-color="#ff8a3d"/>
+                                </linearGradient>
+                            </defs>
+
+                            <rect x="32" y="122" width="220" height="96" rx="22" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="142" y="160" fill="#ecf4ff" font-size="20" text-anchor="middle" font-family="Inter, Arial, sans-serif">Resolve landscape</text>
+                            <text x="142" y="188" fill="#b8c7d9" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">Use LandscapeInfo</text>
+
+                            <rect x="284" y="122" width="220" height="96" rx="22" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="394" y="160" fill="#ecf4ff" font-size="20" text-anchor="middle" font-family="Inter, Arial, sans-serif">Collect components</text>
+                            <text x="394" y="188" fill="#b8c7d9" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">Loaded components only</text>
+
+                            <rect x="536" y="122" width="220" height="96" rx="22" fill="#102031" stroke="rgba(83,215,255,0.3)"/>
+                            <text x="646" y="160" fill="#ecf4ff" font-size="20" text-anchor="middle" font-family="Inter, Arial, sans-serif">Spawn chunks</text>
+                            <text x="646" y="188" fill="#b8c7d9" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">Import height data</text>
+
+                            <rect x="804" y="40" width="284" height="260" rx="28" fill="#0f1d2d" stroke="rgba(110,147,187,0.2)"/>
+                            <text x="946" y="68" fill="#8eaac6" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">Parallel capture stage</text>
+
+                            <rect x="836" y="86" width="220" height="74" rx="18" fill="#102031" stroke="rgba(83,215,255,0.3)"/>
+                            <text x="946" y="118" fill="#ecf4ff" font-size="20" text-anchor="middle" font-family="Inter, Arial, sans-serif">Weight layers</text>
+                            <text x="946" y="142" fill="#b8c7d9" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">Capture mappings</text>
+
+                            <rect x="836" y="180" width="220" height="74" rx="18" fill="#102031" stroke="rgba(255,154,79,0.3)"/>
+                            <text x="946" y="212" fill="#ecf4ff" font-size="20" text-anchor="middle" font-family="Inter, Arial, sans-serif">Foliage transfer</text>
+                            <text x="946" y="236" fill="#b8c7d9" font-size="14" text-anchor="middle" font-family="Inter, Arial, sans-serif">ISM and actor foliage</text>
+
+                            <rect x="1136" y="122" width="152" height="96" rx="22" fill="#112233" stroke="rgba(255,154,79,0.28)"/>
+                            <text x="1212" y="160" fill="#ecf4ff" font-size="19" text-anchor="middle" font-family="Inter, Arial, sans-serif">Finalize state</text>
+                            <text x="1212" y="188" fill="#b8c7d9" font-size="13" text-anchor="middle" font-family="Inter, Arial, sans-serif">Hide source if enabled</text>
+
+                            <line x1="252" y1="170" x2="284" y2="170" stroke="url(#flowA)" stroke-width="4"/>
+                            <line x1="504" y1="170" x2="536" y2="170" stroke="url(#flowA)" stroke-width="4"/>
+                            <line x1="756" y1="170" x2="804" y2="170" stroke="url(#flowMerge)" stroke-width="4"/>
+                            <line x1="1088" y1="170" x2="1136" y2="170" stroke="url(#flowMerge)" stroke-width="4"/>
+
+                            <polygon points="276,162 284,170 276,178" fill="#53d7ff"/>
+                            <polygon points="528,162 536,170 528,178" fill="#53d7ff"/>
+                            <polygon points="796,162 804,170 796,178" fill="#7fd0cf"/>
+                            <polygon points="1128,162 1136,170 1128,178" fill="#ffb26d"/>
+                        </svg>
+                    </div>
+
+                    <div class="split-grid" style="margin-top: 28px;">
+                        <div class="callout">
+                            <h3>💡 Recommended import sequence</h3>
+                            <ol class="steps">
+                                <li>
+                                    <span class="step-num">1</span>
+                                    <div>
+                                        Open the level that contains the source landscape and make sure the components you want are loaded.
+                                    </div>
+                                </li>
+                                <li>
+                                    <span class="step-num">2</span>
+                                    <div>
+                                        Open <span class="inline-code">Window &gt; TerraDyne Setup Wizard</span>, choose <span class="inline-code">Authored World Conversion</span>, and confirm the target landscape.
+                                    </div>
+                                </li>
+                                <li>
+                                    <span class="step-num">3</span>
+                                    <div>
+                                        Start with the safe defaults: hide source on, clear existing chunks on, weight import on, layer mapping capture on, foliage transfer on, material adoption off.
+                                    </div>
+                                </li>
+                                <li>
+                                    <span class="step-num">4</span>
+                                    <div>
+                                        Initialize the world, then inspect the spawned TerraDyne chunks in the Outliner before entering play.
+                                    </div>
+                                </li>
+                                <li>
+                                    <span class="step-num">5</span>
+                                    <div>
+                                        Press Play and validate terrain visibility, material behavior, foliage transfer, and any play-mode UI settings for that map.
+                                    </div>
+                                </li>
+                            </ol>
+                        </div>
+
+                        <div class="callout warn">
+                            <h3>🔹 Material adoption caveat</h3>
+                            <p>
+                                <strong>Leave "Adopt Landscape Material As Master Material" off unless you have a specific reason to test it.</strong> Most landscape graphs rely on landscape-only expressions and are not valid chunk master materials on TerraDyne dynamic meshes.
+                            </p>
+                            <p>
+                                The current branch now refuses clearly incompatible landscape materials and keeps the existing TerraDyne material instead of blindly applying a broken graph. That is a safety net, not a recommendation to turn the option on casually.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 28px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Import option</th>
+                                    <th>Recommended default</th>
+                                    <th>What it actually does</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Hide Source Landscape</strong></td>
+                                    <td>On</td>
+                                    <td>Hides the full source landscape proxy hierarchy after import, not just the one actor you selected.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Clear Existing Chunks</strong></td>
+                                    <td>On</td>
+                                    <td>Destroys existing TerraDyne chunk actors before import so you do not merge new authored data into stale chunk state.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Pause Streaming During Import</strong></td>
+                                    <td>On</td>
+                                    <td>Temporarily freezes chunk streaming while conversion is building authored chunk state.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Import Weight Layers</strong></td>
+                                    <td>On</td>
+                                    <td>Resamples supported painted landscape layers into TerraDyne's four weight layers.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Capture Layer Mappings</strong></td>
+                                    <td>On</td>
+                                    <td>Records source landscape layer names to TerraDyne weight layer indices in migration state for later tooling and debugging.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Regenerate Grass From Imported Layers</strong></td>
+                                    <td>Usually on</td>
+                                    <td>Rebuilds TerraDyne grass using the imported paint data once chunks are active.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Adopt Landscape Material As Master Material</strong></td>
+                                    <td>Off</td>
+                                    <td>Attempts to replace the TerraDyne chunk master material with the source landscape material. Safe only for compatible non-landscape-only graphs.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Transfer Placed Foliage</strong></td>
+                                    <td>On</td>
+                                    <td>Transfers both instanced static mesh foliage and actor foliage types found on the imported landscape components.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Foliage Follows Terrain</strong></td>
+                                    <td>On for deformable worlds</td>
+                                    <td>Keeps transferred foliage placement aligned to terrain changes after import by refreshing placement after edits.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="card-grid" style="margin-top: 28px;">
+                        <div class="card">
+                            <div class="capability-tag">Current behavior</div>
+                            <h3>🔹 Proxy-aware import</h3>
+                            <p>
+                                Current conversion resolves the landscape through <span class="inline-code">ULandscapeInfo</span> and imports all loaded components instead of only the selected proxy actor. This is what you want for streaming-proxy and partitioned landscape setups.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Diagnostics</div>
+                            <h3>🔹 Clear import failure messages</h3>
+                            <p>
+                                The manager now surfaces explicit user-facing errors when the selected landscape has no loaded components or when no TerraDyne chunks were created from the import.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Migration state</div>
+                            <h3>👑 Import metadata stays on the manager</h3>
+                            <p>
+                                Source landscape name, path, scale, imported component count, layer mappings, unmapped layer names, foliage counts, and adoption flags are stored in <span class="inline-code">LandscapeMigrationState</span>.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="callout danger" style="margin-top: 24px;">
+                        <h3>🔹 What conversion does not do for you</h3>
+                        <p>
+                            Converting the landscape does not automatically solve gameplay camera placement, player starts, or map-specific material design. If PIE launches to mostly sky after a successful import, chunk creation may already be fine and the next suspect is your map bootstrap or camera placement, not the import itself.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="editing">
+                    <div class="section-header">
+                        <p class="eyebrow">Runtime Editing</p>
+                        <h2>⛏️ Editing can be a real gameplay mode or safely turned off</h2>
+                        <p class="lead">
+                            TerraDyne's edit controller can either run as a true runtime terrain editor or behave like a normal gameplay controller. The current branch adds a safe switch for disabling the TerraDyne play-mode UI without leaving invisible edit input active.
+                        </p>
+                    </div>
+
+                    <div class="comparison-grid">
+                        <div class="figure">
+                            <h3>⛏️ Editing feature surface</h3>
+                            <p>The edit controller supports raise, lower, smooth, flatten, and paint, with live brush preview and undo/redo coordination on the manager.</p>
+                            <svg viewBox="0 0 920 360" role="img" aria-label="Runtime editing features diagram">
+                                <rect x="34" y="42" width="540" height="284" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.22)"/>
+                                <rect x="74" y="82" width="460" height="204" rx="20" fill="#0a1420" stroke="rgba(83,215,255,0.18)"/>
+                                <path d="M106 246 C170 180, 228 238, 286 196 C338 160, 392 220, 500 178" fill="none" stroke="#53d7ff" stroke-width="6"/>
+                                <circle cx="318" cy="164" r="58" fill="none" stroke="#ff9a4f" stroke-width="5" stroke-dasharray="8 8"/>
+                                <line x1="318" y1="106" x2="318" y2="60" stroke="rgba(255,154,79,0.55)" stroke-width="4"/>
+                                <text x="78" y="66" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Chunk surface + live brush preview</text>
+
+                                <rect x="620" y="58" width="260" height="76" rx="18" fill="#102031" stroke="rgba(83,215,255,0.25)"/>
+                                <text x="654" y="92" fill="#ecf4ff" font-size="22" font-family="Inter, Arial, sans-serif">Brush radius / strength</text>
+                                <text x="666" y="116" fill="#b8c7d9" font-size="15" font-family="Inter, Arial, sans-serif">Widget + mouse wheel + tool state</text>
+
+                                <rect x="620" y="150" width="260" height="76" rx="18" fill="#102031" stroke="rgba(83,215,255,0.25)"/>
+                                <text x="651" y="184" fill="#ecf4ff" font-size="22" font-family="Inter, Arial, sans-serif">Undo / redo by stroke</text>
+                                <text x="659" y="208" fill="#b8c7d9" font-size="15" font-family="Inter, Arial, sans-serif">BeginStroke / CommitStroke</text>
+
+                                <rect x="620" y="242" width="260" height="76" rx="18" fill="#102031" stroke="rgba(255,154,79,0.25)"/>
+                                <text x="644" y="276" fill="#ecf4ff" font-size="22" font-family="Inter, Arial, sans-serif">Replicated brush params</text>
+                                <text x="646" y="300" fill="#b8c7d9" font-size="15" font-family="Inter, Arial, sans-serif">Server RPCs + multicast sync</text>
+                            </svg>
+                        </div>
+
+                        <div class="callout">
+                            <h3>⛏️ Editing controls</h3>
+                            <ul>
+                                <li><strong>Tools:</strong> Raise, Lower, Smooth, Flatten, Paint.</li>
+                                <li><strong>Paint layers:</strong> Four runtime weight layers indexed 0-3.</li>
+                                <li><strong>Flatten behavior:</strong> The controller locks the flatten height when the stroke begins, then reuses it until release.</li>
+                                <li><strong>Brush preview:</strong> The decal shows radius and mode. Current branch uses blue for sculpt and orange for paint.</li>
+                                <li><strong>Notifications:</strong> Critical problems surface via editor toasts or runtime messages through <span class="inline-code">UTerraDyneSubsystem::ShowNotification</span>.</li>
+                                <li><strong>Input:</strong> The edit controller validates <span class="inline-code">TerraDyneClick</span>. Panel buttons remain the safest user-facing path when UI is enabled.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="figure" style="margin-top: 28px;">
+                        <h3>🔹 Play Mode Tool UI switch</h3>
+                        <p>
+                            The property <span class="inline-code">Enable Play Mode Tool UI</span> on <span class="inline-code">ATerraDyneEditController</span> is a safety switch, not a cosmetic toggle. When it is off, TerraDyne deliberately stops behaving like an editing controller.
+                        </p>
+                        <div class="state-compare">
+                            <div class="state-box">
+                                <h3>🔹 <span class="state-dot on"></span> When enabled</h3>
+                                <ul>
+                                    <li>Spawns or reconnects to the TerraDyne tool widget.</li>
+                                    <li>Uses <span class="inline-code">GameAndUI</span> input mode.</li>
+                                    <li>Shows the mouse cursor and click / mouse-over behavior.</li>
+                                    <li>Creates the brush preview decal dynamic material.</li>
+                                    <li>Binds edit input and sends brush / undo / redo RPCs.</li>
+                                </ul>
+                            </div>
+                            <div class="state-box">
+                                <h3>🔹 <span class="state-dot off"></span> When disabled</h3>
+                                <ul>
+                                    <li>Removes the TerraDyne widget if one exists.</li>
+                                    <li>Uses <span class="inline-code">GameOnly</span> input mode.</li>
+                                    <li>Hides the cursor and disables click / mouse-over events.</li>
+                                    <li>Hides the brush preview decal.</li>
+                                    <li>Skips input binding and blocks sculpt / undo / redo edit paths.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-grid" style="margin-top: 28px;">
+                        <div class="card">
+                            <div class="capability-tag">Use case</div>
+                            <h3>🎮 Gameplay maps without terrain UI</h3>
+                            <p>
+                                Use the edit controller with <span class="inline-code">Enable Play Mode Tool UI</span> unchecked when you want TerraDyne present in the map but do not want the runtime editing UX to be available to the player.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Use case</div>
+                            <h3>🔹 Dedicated edit maps</h3>
+                            <p>
+                                Keep the switch on for edit/demo maps, showcase scenes, internal terrain tools, or games where terrain sculpting is an actual player-facing mechanic.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Verification</div>
+                            <h3>🔹 PIE harness exists for the no-UI branch</h3>
+                            <p>
+                                The branch now includes dedicated PIE automation that boots a real TerraDyne edit controller with UI disabled and asserts that the no-UI path is inert end to end.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="persistence">
+                    <div class="section-header">
+                        <p class="eyebrow">Persistence</p>
+                        <h2>💾 Terrain persistence and world persistence are part of the same model</h2>
+                        <p class="lead">
+                            TerraDyne does not just serialize sculpted height changes. Save/load captures terrain buffers, migrated foliage state, procedural settings, authored chunk coordinates, persistent population entries, and world metadata needed to restore the runtime world shape.
+                        </p>
+                    </div>
+
+                    <div class="timeline">
+                        <h3 style="margin-bottom: 16px;">💾 Save / load flow</h3>
+                        <div class="timeline-track">
+                            <div class="timeline-step">
+                                <strong>Chunk state</strong>
+                                Height data, base/sculpt/detail layers, packed weight data, and imported foliage payloads are serialized per chunk.
+                            </div>
+                            <div class="timeline-step">
+                                <strong>Manager state</strong>
+                                Master material path, active grass profile, migration state, procedural settings, biome overlays, AI zones, and build permissions are serialized on the save game.
+                            </div>
+                            <div class="timeline-step">
+                                <strong>Population state</strong>
+                                Persistent actors, regrowth timers, source rules, and procedural chunk state are saved with the same world snapshot.
+                            </div>
+                            <div class="timeline-step">
+                                <strong>Restore</strong>
+                                Load reconstructs chunks, rehydrates metadata, restores transferred foliage payloads, and respawns persistent population actors for loaded chunks.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="split-grid" style="margin-top: 28px;">
+                        <div class="resource-block">
+                            <h3>🧠 Core save calls</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>Manager-&gt;SaveWorld("TerraDyneSave");
+Manager-&gt;LoadWorld("TerraDyneSave");</pre>
+                            </div>
+                            <p style="margin-top: 14px;">
+                                The default slot name in the current branch is <span class="inline-code">TerraDyneSave</span>. Chunk cache data is stored under the configured save directory, defaulting to <span class="inline-code">Saved/SaveGames/TerraDyneCache/</span>.
+                            </p>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🔹 Persistent actor model</h3>
+                            <p>
+                                Use <span class="inline-code">RegisterPersistentActor</span> for already-placed gameplay actors or <span class="inline-code">PlacePersistentActor</span> / <span class="inline-code">PlacePersistentActorFromDescriptor</span> for TerraDyne-owned runtime placement. This is the right layer for props, harvestables, destroyables, and regrowth loops.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="card-grid" style="margin-top: 28px;">
+                        <div class="card">
+                            <div class="capability-tag">Imported content</div>
+                            <h3>🔹 Transferred foliage persists too</h3>
+                            <p>
+                                The save payload includes migrated instanced foliage definitions, override materials, actor foliage classes, per-instance local transforms, and terrain offsets.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Multiplayer</div>
+                            <h3>💾 Brush state replicates separately from save state</h3>
+                            <p>
+                                Runtime editing uses brush RPCs and multicast sync for live play. Save/load is the persistence layer for long-lived world state, not a replacement for replication.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">World transitions</div>
+                            <h3>🕸️ Subsystem owns task flushing</h3>
+                            <p>
+                                The world subsystem is the place to flush pending TerraDyne tasks before teardown. That matters for background IO safety and orderly shutdown.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="framework">
+                    <div class="section-header">
+                        <p class="eyebrow">World Framework</p>
+                        <h2>🎮 TerraDyne now layers gameplay framework systems on top of terrain ownership</h2>
+                        <p class="lead">
+                            This is the part that changes TerraDyne from a narrow runtime terrain plugin into a broader world framework. Presets, procedural outskirts, biome overlays, persistent population, AI zones, build permissions, terrain events, and PCG seed points all live on the runtime manager.
+                        </p>
+                    </div>
+
+                    <div class="figure">
+                        <h3>🏗️ Framework stack</h3>
+                        <p>Think of TerraDyne as layered world state, not just editable mesh.</p>
+                        <svg viewBox="0 0 980 420" role="img" aria-label="World framework stack diagram">
+                            <rect x="48" y="290" width="884" height="86" rx="24" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="490" y="342" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif" text-anchor="middle">Chunks and terrain state</text>
+
+                            <rect x="108" y="220" width="764" height="66" rx="20" fill="#102031" stroke="rgba(83,215,255,0.25)"/>
+                            <text x="490" y="261" fill="#ecf4ff" font-size="21" font-family="Inter, Arial, sans-serif" text-anchor="middle">Authored chunks + procedural outskirts</text>
+
+                            <rect x="154" y="158" width="672" height="56" rx="18" fill="#102031" stroke="rgba(83,215,255,0.25)"/>
+                            <text x="490" y="194" fill="#ecf4ff" font-size="19" font-family="Inter, Arial, sans-serif" text-anchor="middle">Biome overlays and population rules</text>
+
+                            <rect x="196" y="102" width="588" height="48" rx="16" fill="#112233" stroke="rgba(255,154,79,0.26)"/>
+                            <text x="490" y="132" fill="#ecf4ff" font-size="17" font-family="Inter, Arial, sans-serif" text-anchor="middle">AI zones, build permissions, navmesh policy</text>
+
+                            <rect x="236" y="50" width="508" height="42" rx="14" fill="#112233" stroke="rgba(255,154,79,0.26)"/>
+                            <text x="490" y="76" fill="#ecf4ff" font-size="15" font-family="Inter, Arial, sans-serif" text-anchor="middle">PCG seed points, queries, notifications, delegates</text>
+                        </svg>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 28px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Framework element</th>
+                                    <th>Where it lives</th>
+                                    <th>What it is for</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>World preset</strong></td>
+                                    <td><span class="inline-code">UTerraDyneWorldPreset</span></td>
+                                    <td>Packages procedural settings, biome overlays, population rules, AI zones, and build permission zones into one reusable asset.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Procedural settings</strong></td>
+                                    <td><span class="inline-code">FTerraDyneProceduralWorldSettings</span></td>
+                                    <td>Controls seeded outskirts, infinite edge growth, procedural extent, and whether population rules generate instances on procedural chunks.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Biome overlay</strong></td>
+                                    <td><span class="inline-code">FTerraDyneBiomeOverlay</span></td>
+                                    <td>Maps paint weights or procedural noise windows to biome tags for authored and procedural chunks.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Population rules</strong></td>
+                                    <td><span class="inline-code">FTerraDynePopulationSpawnRule</span></td>
+                                    <td>Deterministic rule set for runtime population on procedural and optionally authored chunks.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>AI zones</strong></td>
+                                    <td><span class="inline-code">FTerraDyneAISpawnZone</span></td>
+                                    <td>Gameplay query surface for zone-aware spawning filtered by biome, chunk provenance, and enabled state.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Build permissions</strong></td>
+                                    <td><span class="inline-code">FTerraDyneBuildPermissionZone</span></td>
+                                    <td>Allows or blocks building with explicit reasons and slope checks.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>PCG points</strong></td>
+                                    <td><span class="inline-code">GetPCGSeedPointsForChunk</span></td>
+                                    <td>Exposes TerraDyne-managed metadata into secondary world generation workflows without expensive landscape raycasts.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="card-grid" style="margin-top: 28px;">
+                        <div class="card">
+                            <div class="capability-tag">Gameplay hooks</div>
+                            <h3>🔹 Biome queries</h3>
+                            <p>
+                                Use <span class="inline-code">GetBiomeTagAtLocation</span> to ask what biome a world position currently belongs to. That gives gameplay systems a stable answer after both authored import and runtime edits.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Gameplay hooks</div>
+                            <h3>🔹 Build permissions</h3>
+                            <p>
+                                Use <span class="inline-code">CanBuildAtLocation</span> to gate building systems against zone rules and slope policy, with a reason string when the answer is no.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Gameplay hooks</div>
+                            <h3>🔹 AI spawn zones</h3>
+                            <p>
+                                Use <span class="inline-code">GetAISpawnZonesAtLocation</span> to query zone metadata that can drive encounter spawning, biome-specific AI, or authored combat regions.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Events</div>
+                            <h3>🌍 Terrain, foliage, and population delegates</h3>
+                            <p>
+                                The manager broadcasts change delegates so your project can react to sculpting, foliage movement, or persistent population state changes without polling.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Navigation</div>
+                            <h3>🔹 Navmesh refresh policy is configurable</h3>
+                            <p>
+                                The manager can refresh navigation for terrain and population changes with a configurable dirty-bounds padding value. This matters for AI-heavy games that let players reshape the ground.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Bootstrap</div>
+                            <h3>🛠️ Scene setup can apply presets</h3>
+                            <p>
+                                <span class="inline-code">ATerraDyneSceneSetup</span> lets you pair a preset with a template so the same level bootstrap can bring in terrain ownership and higher-level world metadata together.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="performance">
+                    <div class="section-header">
+                        <p class="eyebrow">Performance and Chunks</p>
+                        <h2>🧩 Chunk management is where TerraDyne stays practical at runtime</h2>
+                        <p class="lead">
+                            Chunk streaming, LOD throttling, delayed collision rebuilds, grass debounce, and debug overlays are what keep runtime terrain editing from collapsing under its own cost.
+                        </p>
+                    </div>
+
+                    <div class="comparison-grid">
+                        <div class="figure">
+                            <h3>🧩 Chunk envelope</h3>
+                            <p>Load and unload radii form the manager's active world envelope, while imported chunks and procedural outskirts remain distinct pieces of state.</p>
+                            <svg viewBox="0 0 920 430" role="img" aria-label="Chunk load and unload diagram">
+                                <rect x="154" y="48" width="612" height="312" rx="28" fill="#0c1725" stroke="rgba(110,147,187,0.22)"/>
+                                <g transform="translate(226 92)">
+                                    <g fill="#102031" stroke="rgba(110,147,187,0.16)">
+                                        <rect x="0" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="328" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="0" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="328" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="0" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="328" y="164" width="72" height="72" rx="10"/>
+                                    </g>
+
+                                    <g fill="rgba(255,154,79,0.18)" stroke="rgba(255,154,79,0.28)">
+                                        <rect x="82" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="0" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="328" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="164" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="164" width="72" height="72" rx="10"/>
+                                    </g>
+
+                                    <g fill="rgba(83,215,255,0.2)" stroke="rgba(83,215,255,0.32)">
+                                        <rect x="164" y="0" width="72" height="72" rx="10"/>
+                                        <rect x="82" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="246" y="82" width="72" height="72" rx="10"/>
+                                        <rect x="164" y="164" width="72" height="72" rx="10"/>
+                                    </g>
+
+                                    <rect x="164" y="82" width="72" height="72" rx="10" fill="rgba(100,221,142,0.22)" stroke="rgba(100,221,142,0.4)" stroke-width="2"/>
+                                    <text x="184" y="127" fill="#ecf4ff" font-size="20" font-family="Inter, Arial, sans-serif">Player</text>
+                                </g>
+
+                                <text x="202" y="390" fill="#b8c7d9" font-size="16" font-family="Inter, Arial, sans-serif">Blue: load radius  |  Orange: unload hysteresis  |  Green: player chunk</text>
+                            </svg>
+                        </div>
+
+                        <div class="callout">
+                            <h3>🔹 Current performance model</h3>
+                            <ul>
+                                <li><strong>Streaming:</strong> Load and unload regions are managed per tick from player positions.</li>
+                                <li><strong>Collision:</strong> Complex collision is disabled on distant chunks based on the LOD distance threshold.</li>
+                                <li><strong>Debounce:</strong> Collision rebuilds and grass regeneration wait briefly after edits to prevent frame spikes during continuous sculpting.</li>
+                                <li><strong>Undo scope:</strong> Undo/redo is stored per player as a stroke-based history, with unloaded-chunk snapshots intentionally skipped.</li>
+                                <li><strong>Debug overlay:</strong> Manager property <span class="inline-code">bShowDebugOverlay</span> visualizes chunk state in the world.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 28px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Control</th>
+                                    <th>Typical use</th>
+                                    <th>Tradeoff</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>DefaultChunkSize</strong></td>
+                                    <td>Larger chunks for fewer actors, smaller chunks for finer streaming.</td>
+                                    <td>Large chunks reduce actor count but increase rebuild blast radius for each edit.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>DefaultResolution</strong></td>
+                                    <td>Raise for more detailed terrain or imported component fidelity.</td>
+                                    <td>Higher resolution increases memory, mesh rebuild work, and save size.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ChunkLoadRadius / ChunkUnloadRadius</strong></td>
+                                    <td>Control how much world is active around players.</td>
+                                    <td>Higher radii improve continuity but increase active chunk count.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MaxChunkOpsPerTick</strong></td>
+                                    <td>Throttle how many chunk operations can happen per streaming tick.</td>
+                                    <td>Too low can make long-distance travel catch up slowly; too high can hitch.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>LODDistanceThreshold</strong></td>
+                                    <td>Turns off complex collision for distant chunks.</td>
+                                    <td>Improves physics cost but moves accuracy to the nearby playable area.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>CollisionDebounceTime</strong></td>
+                                    <td>Delays physics mesh rebuild until editing calms down.</td>
+                                    <td>Lower feels more immediate but can spike the CPU during fast sculpting.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>GrassDebounceTime</strong></td>
+                                    <td>Controls how long TerraDyne waits before regenerating grass after edits.</td>
+                                    <td>Low values update foliage quickly but can thrash on rapid edits.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>MaxUndoHistory</strong></td>
+                                    <td>Keeps more stroke snapshots per player.</td>
+                                    <td>Higher history depth retains more data in memory.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="callout warn" style="margin-top: 24px;">
+                        <h3>🔹 About World Outliner clutter</h3>
+                        <p>
+                            Grouping chunk actors under a parent actor may clean up hierarchy visually, but it does not reduce runtime actor count or chunk cost. If you need Outliner organization, prefer folders or data-layer style organization unless you are deliberately changing attachment behavior in code and understand the transform implications.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="api">
+                    <div class="section-header">
+                        <p class="eyebrow">API Reference</p>
+                        <h2>🧠 Core entry points for C++, Blueprint, and systems code</h2>
+                        <p class="lead">
+                            Most runtime integration should start with the world subsystem, then use the active manager as the authoritative world interface.
+                        </p>
+                    </div>
+
+                    <div class="code-grid">
+                        <div class="resource-block">
+                            <h3>👑 Get the active manager</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>if (UTerraDyneSubsystem* Sys = GetWorld()-&gt;GetSubsystem&lt;UTerraDyneSubsystem&gt;())
+{
+    if (ATerraDyneManager* Manager = Sys-&gt;GetTerrainManager())
+    {
+        Manager-&gt;ApplyGlobalBrush(
+            HitLocation,
+            1200.0f,
+            1.0f,
+            ETerraDyneBrushMode::Lower,
+            0,
+            0.0f);
+    }
+}</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🎮 Query the world for gameplay</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>FString BuildReason;
+const bool bCanBuild = Manager-&gt;CanBuildAtLocation(TestLocation, BuildReason);
+const FName BiomeTag = Manager-&gt;GetBiomeTagAtLocation(TestLocation);
+const TArray&lt;FTerraDyneAISpawnZone&gt; Zones =
+    Manager-&gt;GetAISpawnZonesAtLocation(TestLocation);</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>💾 Save world state</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>Manager-&gt;SaveWorld("TerraDyneSave");
+Manager-&gt;LoadWorld("TerraDyneSave");</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🔹 Persistent actor placement</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>Manager-&gt;PlacePersistentActor(
+    SpawnClass,
+    SpawnTransform,
+    ETerraDynePopulationKind::RuntimePlaced,
+    true,
+    0.0f,
+    false,
+    0.0f);</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="code-grid" style="margin-top: 28px;">
+                        <div class="resource-block">
+                            <h3>🔌 Survival integration example</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>// Add BP_TerraDyne_SurvivalSetup to a startup level
+// or subclass ATerraDyneSurvivalIntegrationExample.
+SurvivalExample-&gt;ConfigureSurvivalWorld();
+SurvivalExample-&gt;OnSurvivalWorldReady.AddDynamic(
+    this,
+    &amp;AMyGameMode::HandleTerraDyneReady);</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🔹 PCG seed export example</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>// BP_TerraDyne_PCGExporter wraps this call for Blueprint.
+const TArray&lt;FTerraDynePCGSeedPoint&gt; Points =
+    Manager-&gt;GetPCGSeedPointsForChunk(ChunkCoord);
+
+for (const FTerraDynePCGSeedPoint&amp; Point : Points)
+{
+    SpawnSecondaryContent(Point);
+}</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🔹 Replication bridge example</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>// BP_TerraDyne_ReplicationBridge is an owned replicated actor.
+ReplicationBridge-&gt;ApplyBrushAuthoritatively(
+    HitLocation,
+    BrushRadius,
+    BrushStrength,
+    ETerraDyneBrushMode::Paint,
+    PaintLayer,
+    PaintValue);</pre>
+                            </div>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🌍 Full terrain sync request</h3>
+                            <div class="code-panel" style="padding: 0;">
+                                <pre>// Use after possession, reconnect, or late join.
+ReplicationBridge-&gt;RequestFullTerrainSync(EditController);</pre>
+                            </div>
+                            <p style="margin-top: 14px;">
+                                Real multiplayer games should own or spawn one replication bridge per editing player.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap" style="margin-top: 28px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>API</th>
+                                    <th>Category</th>
+                                    <th>Use it for</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>ApplyGlobalBrush</strong></td>
+                                    <td>Interaction</td>
+                                    <td>Runtime sculpting or painting on the terrain.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>BeginStroke / CommitStroke / Undo / Redo</strong></td>
+                                    <td>Interaction</td>
+                                    <td>Stroke-based history and player-specific edit reversal.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>GetWorldHeightAtLocation</strong></td>
+                                    <td>PCG</td>
+                                    <td>Read terrain height cheaply from TerraDyne state without relying on landscape traces.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ImportFromLandscapeWithOptions</strong></td>
+                                    <td>Migration</td>
+                                    <td>Direct landscape import path when driving conversion from editor tools or utility code.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ApplyWorldPreset</strong></td>
+                                    <td>Framework</td>
+                                    <td>Push a preset's procedural, biome, and gameplay metadata onto the manager.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>GetPCGSeedPointsForChunk</strong></td>
+                                    <td>PCG</td>
+                                    <td>Export TerraDyne-managed points for secondary generation or spawn logic.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ShowNotification</strong></td>
+                                    <td>System</td>
+                                    <td>Surface actionable user-facing messages through editor toasts or runtime text.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ATerraDyneSurvivalIntegrationExample</strong></td>
+                                    <td>Example</td>
+                                    <td>Small C++/Blueprint setup actor for applying packaged first-run defaults in survival-style projects.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ATerraDynePCGIntegrationExample</strong></td>
+                                    <td>Example</td>
+                                    <td>Exports PCG seed points to Blueprint events and project-specific generation systems.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>ATerraDyneReplicationIntegrationExample</strong></td>
+                                    <td>Example</td>
+                                    <td>Shows authoritative brush routing and full terrain sync requests through an owned replicated actor.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="callout" style="margin-top: 24px;">
+                        <h3>🔹 Blueprint-facing mindset</h3>
+                        <p>
+                            Use the manager as your single source of truth. Terrain, migrated foliage, biome state, build rules, AI zones, and persistent population are already co-located there. That is cleaner than scattering project-specific caches across unrelated systems.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="examples">
+                    <div class="section-header">
+                        <p class="eyebrow">Examples and Content</p>
+                        <h2>📁 Shipped content is meant to shorten adoption time</h2>
+                        <p class="lead">
+                            TerraDyne 0.4.1 includes setup helpers, example Blueprints, C++ integration actors, packaged sample meshes, a sample grass profile, a sample world preset, a warning-clean showcase map, built-in UI content, and automation scripts that recreate supporting assets without repetitive editor work.
+                        </p>
+                    </div>
+
+                    <div class="example-grid">
+                        <div class="card">
+                            <div class="capability-tag">Recommended first run</div>
+                            <h3>🛠️ BP_TerraDyne_SurvivalSetup</h3>
+                            <p>
+                                Blueprint child of <span class="inline-code">ATerraDyneSurvivalIntegrationExample</span>. It finds or spawns a manager, applies the sample world preset and grass profile, enables practical survival defaults, and broadcasts when the TerraDyne world is ready.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">PCG bridge</div>
+                            <h3>🔹 BP_TerraDyne_PCGExporter</h3>
+                            <p>
+                                Blueprint child of <span class="inline-code">ATerraDynePCGIntegrationExample</span>. It refreshes chunk seed points and emits Blueprint events so project PCG graphs or secondary spawn systems can consume TerraDyne-managed metadata.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Multiplayer bridge</div>
+                            <h3>🔹 BP_TerraDyne_ReplicationBridge</h3>
+                            <p>
+                                Blueprint child of <span class="inline-code">ATerraDyneReplicationIntegrationExample</span>. It shows how an owned replicated actor can route brush edits to the server, multicast terrain changes, and request full terrain sync.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <div class="capability-tag">Legacy sample</div>
+                            <h3>📝 Save / biome / editor examples</h3>
+                            <p>
+                                Existing compact examples such as save/load, biome reactions, and runtime-editor setup remain useful as narrow references, but the 0.4.1 examples are the recommended entry points for new integrations.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="figure" style="margin-top: 28px;">
+                        <h3>📁 Packaged sample content map</h3>
+                        <p>These assets are now part of the plugin payload and are referenced by the first-run defaults, scene setup, orchestrator, demo map, and validation tests.</p>
+                        <svg viewBox="0 0 1240 420" role="img" aria-label="TerraDyne packaged sample content map">
+                            <rect x="42" y="50" width="260" height="318" rx="26" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="82" y="94" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Samples</text>
+                            <text x="82" y="136" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Materials/</text>
+                            <text x="106" y="166" fill="#53d7ff" font-size="15" font-family="Inter, Arial, sans-serif">M_TerraDyne_GrassSample</text>
+                            <text x="82" y="208" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Meshes/</text>
+                            <text x="106" y="238" fill="#53d7ff" font-size="15" font-family="Inter, Arial, sans-serif">SM_TerraDyne_GrassA/B/C</text>
+                            <text x="82" y="280" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Profiles + Presets</text>
+                            <text x="106" y="310" fill="#53d7ff" font-size="15" font-family="Inter, Arial, sans-serif">ShowcaseGrass / ShowcaseWorld</text>
+
+                            <line x1="302" y1="210" x2="402" y2="210" stroke="rgba(83,215,255,0.55)" stroke-width="4"/>
+                            <polygon points="394,202 402,210 394,218" fill="#53d7ff"/>
+
+                            <rect x="402" y="50" width="304" height="318" rx="26" fill="#102031" stroke="rgba(83,215,255,0.28)"/>
+                            <text x="446" y="94" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">Bootstrap consumers</text>
+                            <text x="446" y="140" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Setup Wizard</text>
+                            <text x="446" y="174" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">ATerraDyneSceneSetup</text>
+                            <text x="446" y="208" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">ATerraDyneOrchestrator</text>
+                            <text x="446" y="242" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">CreateDemoMap.py</text>
+                            <text x="446" y="276" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">CreateExampleBlueprints.py</text>
+                            <text x="446" y="318" fill="#64dd8e" font-size="15" font-family="Inter, Arial, sans-serif">Reruns without warnings</text>
+
+                            <line x1="706" y1="210" x2="806" y2="210" stroke="rgba(255,154,79,0.52)" stroke-width="4"/>
+                            <polygon points="798,202 806,210 798,218" fill="#ff9a4f"/>
+
+                            <rect x="806" y="50" width="392" height="318" rx="26" fill="#0c1725" stroke="rgba(110,147,187,0.25)"/>
+                            <text x="850" y="94" fill="#ecf4ff" font-size="24" font-family="Inter, Arial, sans-serif">User-visible result</text>
+                            <text x="850" y="140" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Survival first run has real grass assets</text>
+                            <text x="850" y="174" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Showcase map is self-contained</text>
+                            <text x="850" y="208" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">No missing MW placeholder dependency</text>
+                            <text x="850" y="242" fill="#b8c7d9" font-size="17" font-family="Inter, Arial, sans-serif">Examples load from /TerraDyne/Examples</text>
+                            <text x="850" y="294" fill="#64dd8e" font-size="15" font-family="Inter, Arial, sans-serif">Demo map live-load: no TerraDyne/map diagnostics</text>
+                        </svg>
+                    </div>
+
+                    <div class="split-grid" style="margin-top: 28px;">
+                        <div class="resource-block">
+                            <h3>✨ Showcase map</h3>
+                            <p>
+                                <span class="inline-code">Content/Maps/DemoMap_Showcase</span> is the quickest way to see the broader framework in motion. The orchestrator walks through sculpting, paint, save/load, foliage, population, AI zones, build permissions, and PCG-relevant metadata. In 0.4.1 it prefers packaged samples and no longer depends on missing sample meshes or legacy project-local placeholder content.
+                            </p>
+                        </div>
+
+                        <div class="resource-block">
+                            <h3>🔹 Automation scripts</h3>
+                            <p>
+                                Scripts in <span class="inline-code">Content/Scripts/</span> can create sample meshes/profiles/presets, example Blueprints, demo maps, brush preview material, and other supporting assets without repeating manual editor setup across projects.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="troubleshooting">
+                    <div class="section-header">
+                        <p class="eyebrow">Troubleshooting</p>
+                        <h2>🛠️ Most failures are setup mistakes, import assumptions, or material mismatches</h2>
+                        <p class="lead">
+                            Current TerraDyne branches are better about surfacing errors to the user instead of only logging them, but it still helps to know which symptoms map to which category of problem.
+                        </p>
+                    </div>
+
+                    <div class="trouble-grid">
+                        <div class="card">
+                            <h3>⛰️ No landscape detected in the wizard</h3>
+                            <p>
+                                Open the level that actually contains the landscape, then click <span class="inline-code">Refresh</span>. The authored conversion template only enables initialization when the selected landscape resolves to a real actor.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🔹 Import says no loaded components</h3>
+                            <p>
+                                The current import path uses the full landscape group but only imports loaded components. In streaming or partitioned setups, load the relevant cells or proxies first, then rerun the conversion.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🧩 Import created no chunks</h3>
+                            <p>
+                                That is now surfaced explicitly. Suspects are invalid target landscape state, unloaded source components, or a failed chunk spawn path. Inspect the manager, output log, and source level state before changing anything else.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🌍 Terrain is black or looks wrong after conversion</h3>
+                            <p>
+                                The most common cause is incompatible material adoption. Use a standard TerraDyne-compatible chunk material instead of a landscape-only graph. Leave the adopt-material option off unless you are intentionally validating a compatible material.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>⛰️ Only part of the landscape imported</h3>
+                            <p>
+                                In the current branch, partial imports usually mean only part of the source landscape was loaded, not that the system only understands a single proxy. Load the missing landscape components and retry.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🔹 Foliage did not transfer as expected</h3>
+                            <p>
+                                Confirm that <span class="inline-code">Transfer Placed Foliage</span> was enabled. That option now covers both instanced foliage and actor foliage capture for imported components, but it still depends on the source component state and supported foliage definitions.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🌿 First-run grass or preset assets are missing</h3>
+                            <p>
+                                Verify the plugin was packaged with <span class="inline-code">Content/Samples</span>, <span class="inline-code">Content/Scripts</span>, and <span class="inline-code">Resources/Icon128.png</span>. The 0.4.1 defaults expect <span class="inline-code">DA_TerraDyne_ShowcaseWorld</span>, <span class="inline-code">DA_TerraDyne_ShowcaseGrass</span>, and <span class="inline-code">SM_TerraDyne_GrassA/B/C</span>.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🔹 Example Blueprint generation warns on rerun</h3>
+                            <p>
+                                Use the current <span class="inline-code">CreateExampleBlueprints.py</span>. It preserves existing survival, PCG, and replication example Blueprints rather than repeatedly reparenting assets that already exist.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>⛏️ Terrain editing does nothing in play</h3>
+                            <p>
+                                Check whether your controller has <span class="inline-code">Enable Play Mode Tool UI</span> turned off. Also verify the input action <span class="inline-code">TerraDyneClick</span> exists if you expect edit mode to be active.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>⛏️ I want no editing UI in gameplay</h3>
+                            <p>
+                                Use the safe controller switch instead of simply hiding the widget. The switch also restores <span class="inline-code">GameOnly</span> input, hides the cursor, hides the brush preview, and blocks TerraDyne edit RPC paths.
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>🔹 Fab validator complains about stale output</h3>
+                            <p>
+                                Rebuild from a clean package root and ensure the final zip does not contain <span class="inline-code">HostProject.uproject</span>, <span class="inline-code">Binaries</span>, <span class="inline-code">Intermediate</span>, <span class="inline-code">Saved</span>, or <span class="inline-code">DerivedDataCache</span>. TerraDyne's validator now rejects those directories.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="callout warn" style="margin-top: 24px;">
+                        <h3>🔹 Read symptoms carefully</h3>
+                        <p>
+                            A map that boots to mostly sky after a conversion is not always an import failure. If chunk actors exist in the Outliner after conversion, look next at player start, camera placement, play-mode controller, and map bootstrap assumptions.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="support">
+                    <div class="section-header">
+                        <p class="eyebrow">Support and Release Notes</p>
+                        <h2>📊 Current manual status and release-facing notes</h2>
+                        <p class="lead">
+                            This manual is now aligned with TerraDyne 0.4.1 and the current Fab-facing source packages. It documents the sample-backed first run, integration examples, demo-map cleanup, descriptor metadata, FilterPlugin policy, and clean BuildPlugin output for UE 5.5, 5.6, and 5.7.
+                        </p>
+                    </div>
+
+                    
+                    <div class="table-wrap" style="margin-top: 28px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Validation gate</th>
+                                    <th>0.4.1 result</th>
+                                    <th>What was checked</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>C++ build</strong></td>
+                                    <td>Passed</td>
+                                    <td>UE 5.7 editor build completed successfully before release packaging.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Automation</strong></td>
+                                    <td><span class="inline-code">23/23</span> passed</td>
+                                    <td>Runtime, rendering, persistence, migration, first-run default, sample asset, and integration-example checks.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Blueprint generation</strong></td>
+                                    <td><span class="inline-code">0 error(s), 0 warning(s)</span></td>
+                                    <td>Survival, PCG, and replication example Blueprints preserve cleanly on rerun.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Showcase map</strong></td>
+                                    <td>No TerraDyne/map diagnostics</td>
+                                    <td>Live-load smoke test against <span class="inline-code">/TerraDyne/Maps/DemoMap_Showcase</span>.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Fab package isolation</strong></td>
+                                    <td>Passed</td>
+                                    <td>No <span class="inline-code">HostProject.uproject</span>, no <span class="inline-code">Binaries</span>, no <span class="inline-code">Intermediate</span>, required content/resources/scripts/shaders included.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="split-grid" style="margin-top: 28px;">
+                        <div class="resource-block">
+                            <h3>🔹 Primary support links</h3>
+                            <ul>
+                                <li><a href="https://www.gregorigin.com">www.gregorigin.com</a></li>
+                                <li><a href="https://gregorigin.com/Terradyne">https://gregorigin.com/Terradyne</a></li>
+                                <li><a href="https://discord.gg/nqYQ5mtmHb">https://discord.gg/nqYQ5mtmHb</a></li>
+                            </ul>
+                        </div>
+
+                        
+                    </div>
+
+                    <div class="footer">
+                        <p>
+                            <strong>Copyright (c) 2026 GregOrigin. All Rights Reserved.</strong><br>
+                            TerraDyne documentation for the current runtime world framework branch.
+                        </p>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const sections = Array.from(document.querySelectorAll("main section[id]"));
+            const navLinks = Array.from(document.querySelectorAll("[data-nav]"));
+            const activeLabel = document.getElementById("active-section");
+
+            if (!sections.length || !navLinks.length || !activeLabel) {
+                return;
+            }
+
+            const labelMap = new Map(navLinks.map((link) => [link.getAttribute("href").slice(1), link.textContent.trim()]));
+
+            const setActive = (id) => {
+                navLinks.forEach((link) => {
+                    link.classList.toggle("active", link.getAttribute("href") === "#" + id);
+                });
+                activeLabel.textContent = labelMap.get(id) || "Overview";
+            };
+
+            const observer = new IntersectionObserver(
+                (entries) => {
+                    const visible = entries
+                        .filter((entry) => entry.isIntersecting)
+                        .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+                    if (visible.length > 0) {
+                        setActive(visible[0].target.id);
+                    }
+                },
+                {
+                    rootMargin: "-30% 0px -55% 0px",
+                    threshold: [0.1, 0.25, 0.5]
+                }
+            );
+
+            sections.forEach((section) => observer.observe(section));
+            setActive("overview");
+        })();
+    </script>
+</body>
+</html>

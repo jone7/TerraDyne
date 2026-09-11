@@ -6,6 +6,19 @@
 #include "UI/TerraDyneToolWidget.h"
 #include "World/TerraDyneTileData.h"
 
+namespace TerraDynePanelConstants
+{
+	constexpr float PanelWidth = 380.0f;
+	constexpr float HeaderHeight = 50.0f;
+	constexpr float SliderRadiusMin = 100.0f;
+	constexpr float SliderRadiusMax = 10000.0f;
+	constexpr float SliderStrengthMin = 0.0f;
+	constexpr float SliderStrengthMax = 5.0f;
+	constexpr float StrengthDisplayScale = 20.0f; // 0-5 range -> 0-100%
+	constexpr float RadiusDisplayScale = 100.0f;  // UU -> meters
+	constexpr int32 MaxPaintLayer = 3;
+}
+
 /**
  * Native Slate implementation of the TerraDyne Control Panel.
  * Provides a professional, runtime-ready GUI for the plugin.
@@ -28,6 +41,7 @@ private:
 	TWeakObjectPtr<UTerraDyneToolWidget> OwnerWidget;
 	
 	// Window State
+	bool bHasInitializedPosition = false;
 	bool bIsDragging = false;
 	FVector2D DragOffset;
 	FVector2D WindowPosition = FVector2D(50, 50);
@@ -59,11 +73,13 @@ private:
 	void OnBrushStrengthChanged(float NewValue);
 	FText GetBrushStrengthText() const;
 	
-	// Orchestration
-	FReply StartShowcase();
-	FReply StartPersistenceTest();
+	// Actions
+	FReply OnSaveWorldClicked();
+	FReply OnResetTerrainClicked();
+	FReply OnToggleDebugOverlay();
 
 	// Visualization
+	FText GetVersionText() const;
 	FText GetStatsText() const;
 	FText GetGPUStatsText() const;
 	FSlateColor GetGPUStatusColor() const;

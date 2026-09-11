@@ -90,7 +90,7 @@ void UTerraDyneMeshUtils::UpdateHoleAtLocation(UDynamicMesh* TargetMesh, FVector
 			}
 
 		},
-		EDynamicMeshChangeType::AttributeEdit,
+		EDynamicMeshChangeType::GeneralEdit,
 		EDynamicMeshAttributeChangeFlags::TriangleGroups); // <-- FIXED: Use TriangleGroups for material ID changes
 }
 

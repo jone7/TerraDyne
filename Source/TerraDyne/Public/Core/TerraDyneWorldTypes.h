@@ -36,6 +36,14 @@ enum class ETerraDyneBuildPermission : uint8
 	Blocked UMETA(DisplayName = "Blocked")
 };
 
+UENUM(BlueprintType)
+enum class ETerraDyneNotifySeverity : uint8
+{
+	Info    UMETA(DisplayName = "Info"),
+	Warning UMETA(DisplayName = "Warning"),
+	Error   UMETA(DisplayName = "Error")
+};
+
 USTRUCT(BlueprintType)
 struct FTerraDynePopulationDescriptor
 {

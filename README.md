@@ -1,4 +1,4 @@
-# 🌍 TerraDyne 0.3
+# 🌍 TerraDyne 0.4
 
 > Turn an authored Unreal Landscape into a persistent, runtime-editable world without switching to voxels.
 

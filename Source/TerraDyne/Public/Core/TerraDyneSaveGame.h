@@ -165,6 +165,10 @@ class TERRADYNE_API UTerraDyneSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
+	/** Explicit schema marker for project-level world saves. Zero identifies legacy saves. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "TerraDyne")
+	int32 SaveFormatVersion = 2;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "TerraDyne")
 	FDateTime Timestamp;
 

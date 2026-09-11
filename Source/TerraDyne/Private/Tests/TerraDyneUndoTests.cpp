@@ -158,4 +158,111 @@ bool FTerraDyneUndoRoundTripTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneBrushUsesExplicitTargetLayerTest,
+    "TerraDyne.Undo.ExplicitTargetLayer",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTerraDyneBrushUsesExplicitTargetLayerTest::RunTest(const FString& Parameters)
+{
+    UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
+    TestNotNull(TEXT("World exists"), World);
+    if (!World) return false;
+
+    ATerraDyneManager* Manager = World->SpawnActor<ATerraDyneManager>();
+    TestNotNull(TEXT("Manager spawned"), Manager);
+    if (!Manager) return false;
+
+    ATerraDyneChunk* Chunk = World->SpawnActor<ATerraDyneChunk>();
+    TestNotNull(TEXT("Chunk spawned"), Chunk);
+    if (!Chunk) return false;
+
+    Chunk->GridCoordinate = FIntPoint(0, 0);
+    Chunk->InitializeChunk(FIntPoint(0, 0), 1000.f, 32, nullptr, nullptr);
+    Manager->GlobalChunkSize = 1000.f;
+    Manager->ActiveLayer = ETerraDyneLayer::Sculpt;
+    Manager->RebuildChunkMap();
+
+    const int32 NumSamples = Chunk->Resolution * Chunk->Resolution;
+    Chunk->BaseBuffer.Init(0.0f, NumSamples);
+    Chunk->SculptBuffer.Init(0.0f, NumSamples);
+    Chunk->DetailBuffer.Init(0.0f, NumSamples);
+    Chunk->HeightBuffer.Init(0.0f, NumSamples);
+
+    Manager->ApplyGlobalBrush(
+        FVector::ZeroVector,
+        250.0f,
+        500.0f,
+        ETerraDyneBrushMode::Raise,
+        ETerraDyneLayer::Base);
+
+    bool bBaseChanged = false;
+    bool bSculptChanged = false;
+    for (int32 Index = 0; Index < NumSamples; ++Index)
+    {
+        bBaseChanged |= !FMath::IsNearlyZero(Chunk->BaseBuffer[Index]);
+        bSculptChanged |= !FMath::IsNearlyZero(Chunk->SculptBuffer[Index]);
+    }
+
+    TestTrue(TEXT("Explicit base-layer brush modifies the base buffer"), bBaseChanged);
+    TestFalse(TEXT("Explicit base-layer brush does not leak into the sculpt buffer"), bSculptChanged);
+
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneUndoRestoresAllHeightLayersTest,
+    "TerraDyne.Undo.RestoresAllHeightLayers",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTerraDyneUndoRestoresAllHeightLayersTest::RunTest(const FString& Parameters)
+{
+    UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
+    TestNotNull(TEXT("World exists"), World);
+    if (!World) return false;
+
+    ATerraDyneManager* Manager = World->SpawnActor<ATerraDyneManager>();
+    TestNotNull(TEXT("Manager spawned"), Manager);
+    if (!Manager) return false;
+
+    APlayerController* PC = World->SpawnActor<APlayerController>();
+    TestNotNull(TEXT("PlayerController spawned"), PC);
+    if (!PC) return false;
+
+    ATerraDyneChunk* Chunk = World->SpawnActor<ATerraDyneChunk>();
+    TestNotNull(TEXT("Chunk spawned"), Chunk);
+    if (!Chunk) return false;
+
+    Chunk->GridCoordinate = FIntPoint(0, 0);
+    Chunk->InitializeChunk(FIntPoint(0, 0), 1000.f, 32, nullptr, nullptr);
+    Manager->GlobalChunkSize = 1000.f;
+    Manager->RebuildChunkMap();
+
+    const int32 NumSamples = Chunk->Resolution * Chunk->Resolution;
+    Chunk->BaseBuffer.Init(0.0f, NumSamples);
+    Chunk->SculptBuffer.Init(0.0f, NumSamples);
+    Chunk->DetailBuffer.Init(0.0f, NumSamples);
+    Chunk->HeightBuffer.Init(0.0f, NumSamples);
+
+    Manager->BeginStroke(FVector::ZeroVector, 0.f, PC);
+
+    Chunk->BaseBuffer[0] = 0.25f;
+    Chunk->SculptBuffer[0] = 0.5f;
+    Chunk->DetailBuffer[0] = -0.1f;
+    Chunk->HeightBuffer[0] = 0.65f;
+
+    Manager->CommitStroke(PC);
+    Manager->Undo(PC);
+
+    TestEqual(TEXT("Undo restores base layer"), Chunk->BaseBuffer[0], 0.0f);
+    TestEqual(TEXT("Undo restores sculpt layer"), Chunk->SculptBuffer[0], 0.0f);
+    TestEqual(TEXT("Undo restores detail layer"), Chunk->DetailBuffer[0], 0.0f);
+
+    Manager->Redo(PC);
+
+    TestEqual(TEXT("Redo restores base layer"), Chunk->BaseBuffer[0], 0.25f);
+    TestEqual(TEXT("Redo restores sculpt layer"), Chunk->SculptBuffer[0], 0.5f);
+    TestEqual(TEXT("Redo restores detail layer"), Chunk->DetailBuffer[0], -0.1f);
+
+    return true;
+}
+
 #endif // WITH_EDITOR

@@ -2,19 +2,21 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/TerraDyneManager.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "TerraDyneBaker.generated.h"
 
 // Forward Declarations
 class ULandscapeComponent;
 class ALandscapeProxy;
+class UTerraDyneLandscapeAssetSet;
 class UTerraDyneTileData;
 
 /**
  * UTerraDyneBaker
  * 
- * Editor-only utility library responsible for converting Stock Unreal Landscapes 
- * into TerraDyne's optimized binary asset format (UTerraDyneTileData).
+ * Editor-only utility library responsible for converting stock Unreal Landscapes
+ * into TerraDyne's authored-world runtime assets.
  * 
  * This processes high-res textures (height/weight) and quantizes/compresses 
  * them for efficient runtime streaming.
@@ -25,17 +27,15 @@ class TERRADYNEEDITOR_API UTerraDyneBaker : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
-
 	/**
-	 * Main Entry Point.
-	 * Bakes an entire Landscape Actor into a set of UTerraDyneTileData assets.
-	 * 
-	 * @param SourceLandscape   The actor to convert.
-	 * @param DestinationPath   Package path to save assets (e.g. "/Game/Map/TerraDyne").
-	 * @return                  List of created data assets.
+	 * Bakes a Landscape into a runtime-safe authored-world asset set and saves the generated packages.
+	 * This is the packaged-build path used by the unified authored conversion workflow.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Baking")
-	static TArray<UTerraDyneTileData*> BakeLandscapeToAssets(ALandscapeProxy* SourceLandscape, FString DestinationPath);
+	static UTerraDyneLandscapeAssetSet* BakeLandscapeToAssetSet(
+		ALandscapeProxy* SourceLandscape,
+		FString DestinationPath,
+		const FTerraDyneLandscapeMigrationOptions& Options);
 
 	/**
 	 * Bakes a single Landscape Component into a Data Asset.
@@ -60,5 +60,17 @@ private:
 	 * Internal helper to read Weightmap textures.
 	 * Extracts channel usage for the first 4 layers (RGBA).
 	 */
-	static bool ExtractWeightmapData(ULandscapeComponent* Comp, TArray<FColor>& OutData, int32& OutRes);
+	static bool ExtractWeightmapData(
+		ULandscapeComponent* Comp,
+		TArray<FColor>& OutData,
+		int32& OutRes,
+		const TArray<FName>* CanonicalLayerNames = nullptr);
+
+	static bool HasVisibilityHoles(ULandscapeComponent* Comp);
+
+	static UTerraDyneTileData* BakeComponentInternal(
+		ULandscapeComponent* Component,
+		FString DestinationPath,
+		FString AssetNameOverride,
+		const TArray<FName>* CanonicalLayerNames);
 };

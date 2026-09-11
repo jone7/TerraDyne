@@ -2,18 +2,26 @@
 #include "Core/TerraDyneEditController.h"
 #include "UI/TerraDyneToolWidget.h"
 #include "Core/TerraDyneManager.h"
+#include "Core/TerraDyneReplicationComponent.h"
 #include "Core/TerraDyneSubsystem.h"
 #include "DrawDebugHelpers.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/DecalComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
+#include "GameFramework/InputSettings.h"
+#include "TerraDyneModule.h"
 #include "Engine/World.h"
 #include "World/TerraDyneTileData.h"
 #include "World/TerraDyneChunk.h"
+#include "Settings/TerraDyneSettings.h"
 
 ATerraDyneEditController::ATerraDyneEditController()
 {
@@ -23,6 +31,8 @@ ATerraDyneEditController::ATerraDyneEditController()
 	bIsClicking = false;
 	PrimaryActorTick.bCanEverTick = true;
 	UIClass = UTerraDyneToolWidget::StaticClass();
+	bAllowRemoteTerrainEditing = false;
+	TerraDyneReplication = CreateDefaultSubobject<UTerraDyneReplicationComponent>(TEXT("TerraDyneReplication"));
 	
 	BrushRadius = 2000.0f;
 	BrushStrength = 1.0f;
@@ -31,12 +41,64 @@ ATerraDyneEditController::ATerraDyneEditController()
 	bFlattenHeightLocked = false;
 	LockedFlattenHeight = 0.f;
 	LastValidHitLocation = FVector::ZeroVector;
+
+	// Brush preview decal
+	BrushDecal = CreateDefaultSubobject<UDecalComponent>(TEXT("BrushPreviewDecal"));
+	BrushDecal->SetupAttachment(GetRootComponent());
+	BrushDecal->DecalSize = FVector(10000.0f, 2000.0f, 2000.0f); // Z-extent, X-radius, Y-radius
+	BrushDecal->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f)); // Project downward
+	BrushDecal->SetVisibility(false);
+
+	// Load brush preview material
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BrushMatFinder(
+		TEXT("/TerraDyne/Materials/M_TerraDyne_BrushPreview"));
+	if (BrushMatFinder.Succeeded())
+	{
+		BrushDecal->SetDecalMaterial(BrushMatFinder.Object);
+	}
 }
 
 void ATerraDyneEditController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
-	
+
+	// TODO: Migrate to Enhanced Input System (UEnhancedInputComponent + UInputAction assets)
+	// Legacy input is retained for backward compatibility with existing projects.
+
+	if (!bEnablePlayModeToolUI)
+	{
+		return;
+	}
+
+	// Validate input action exists before binding
+	const UInputSettings* InputSettings = GetDefault<UInputSettings>();
+	bool bHasTerraDyneClick = false;
+	if (InputSettings)
+	{
+		for (const FInputActionKeyMapping& Mapping : InputSettings->GetActionMappings())
+		{
+			if (Mapping.ActionName == TEXT("TerraDyneClick"))
+			{
+				bHasTerraDyneClick = true;
+				break;
+			}
+		}
+	}
+
+	if (!bHasTerraDyneClick)
+	{
+		UE_LOG(LogTerraDyne, Error, TEXT("TerraDyne: Input action 'TerraDyneClick' not found. Add it in Project Settings > Input to enable terrain editing."));
+		if (UWorld* World = GetWorld())
+		{
+			if (UTerraDyneSubsystem* Sys = World->GetSubsystem<UTerraDyneSubsystem>())
+			{
+				Sys->ShowNotification(
+					NSLOCTEXT("TerraDyne", "NoInput", "Input action 'TerraDyneClick' not found. Add it in Project Settings > Input."),
+					ETerraDyneNotifySeverity::Error);
+			}
+		}
+	}
+
 	InputComponent->BindAction("TerraDyneClick", IE_Pressed, this, &ATerraDyneEditController::OnLeftClickStart);
 	InputComponent->BindAction("TerraDyneClick", IE_Released, this, &ATerraDyneEditController::OnLeftClickStop);
 	InputComponent->BindAxis("MouseWheelAxis", this, &ATerraDyneEditController::OnMouseWheel);
@@ -48,30 +110,94 @@ void ATerraDyneEditController::BeginPlay()
 {
 	Super::BeginPlay();
 	
-	UE_LOG(LogTemp, Log, TEXT("EditController: Initializing..."));
-	
-	// Spawn UI
+	UE_LOG(LogTerraDyne, Log, TEXT("EditController: Initializing..."));
+
+	TArray<UUserWidget*> FoundWidgets;
 	if (UIClass)
 	{
-		ActiveUI = CreateWidget<UTerraDyneToolWidget>(this, UIClass);
-		if (ActiveUI)
+		UWidgetBlueprintLibrary::GetAllWidgetsOfClass(GetWorld(), FoundWidgets, UIClass, false);
+	}
+
+	if (bEnablePlayModeToolUI)
+	{
+		// Spawn UI if it doesn't already exist
+		if (UIClass)
 		{
-			ActiveUI->AddToViewport(100);
-			ActiveUI->SetVisibility(ESlateVisibility::Visible);
-			UE_LOG(LogTemp, Log, TEXT("EditController: UI spawned"));
+			if (FoundWidgets.Num() == 0)
+			{
+				ActiveUI = CreateWidget<UTerraDyneToolWidget>(this, UIClass);
+				if (ActiveUI)
+				{
+					ActiveUI->AddToViewport(100);
+					ActiveUI->SetVisibility(ESlateVisibility::Visible);
+					UE_LOG(LogTerraDyne, Log, TEXT("EditController: UI spawned"));
+				}
+			}
+			else
+			{
+				ActiveUI = Cast<UTerraDyneToolWidget>(FoundWidgets[0]);
+				UE_LOG(LogTerraDyne, Log, TEXT("EditController: Connected to existing UI"));
+			}
+		}
+		else
+		{
+			UE_LOG(LogTerraDyne, Warning, TEXT("EditController: No UIClass set"));
+		}
+
+		bShowMouseCursor = true;
+		bEnableClickEvents = true;
+		bEnableMouseOverEvents = true;
+
+		// Set input mode - Game AND UI so mouse works
+		FInputModeGameAndUI InputMode;
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		InputMode.SetHideCursorDuringCapture(false);
+		SetInputMode(InputMode);
+
+		// Create dynamic material instance for brush decal
+		if (BrushDecal && BrushDecal->GetDecalMaterial())
+		{
+			BrushDecalMID = BrushDecal->CreateDynamicMaterialInstance();
+		}
+		else if (BrushDecal)
+		{
+			// Fallback: flat-color translucent decal
+			UMaterialInterface* FallbackMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/DefaultDecalMaterial.DefaultDecalMaterial"));
+			if (FallbackMat)
+			{
+				BrushDecal->SetDecalMaterial(FallbackMat);
+				BrushDecalMID = BrushDecal->CreateDynamicMaterialInstance();
+			}
 		}
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("EditController: No UIClass set"));
+		for (UUserWidget* FoundWidget : FoundWidgets)
+		{
+			if (FoundWidget)
+			{
+				FoundWidget->RemoveFromParent();
+			}
+		}
+
+		ActiveUI = nullptr;
+		BrushDecalMID = nullptr;
+
+		if (BrushDecal)
+		{
+			BrushDecal->SetVisibility(false);
+		}
+
+		bShowMouseCursor = false;
+		bEnableClickEvents = false;
+		bEnableMouseOverEvents = false;
+
+		FInputModeGameOnly InputMode;
+		SetInputMode(InputMode);
+
+		UE_LOG(LogTerraDyne, Log, TEXT("EditController: Play mode tool UI disabled"));
 	}
-	
-	// Set input mode - Game AND UI so mouse works
-	FInputModeGameAndUI InputMode;
-	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-	InputMode.SetHideCursorDuringCapture(false);
-	SetInputMode(InputMode);
-	
+
 	// Move player up so they don't spawn inside terrain
 	APawn* MyPawn = GetPawn();
 	if (MyPawn)
@@ -79,17 +205,9 @@ void ATerraDyneEditController::BeginPlay()
 		MyPawn->SetActorLocation(FVector(0, 0, 2000));
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("EditController: Ready - Mouse cursor enabled"));
+	UE_LOG(LogTerraDyne, Log, TEXT("EditController: Ready - %s"),
+		bEnablePlayModeToolUI ? TEXT("Play mode tool UI enabled") : TEXT("Play mode tool UI disabled"));
 
-	// Late-join sync: on the server, push current terrain state to this client
-	if (HasAuthority() && !IsLocalController())
-	{
-		UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>();
-		if (ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr)
-		{
-			Manager->SendFullSyncToController(this);
-		}
-	}
 }
 
 void ATerraDyneEditController::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -109,6 +227,12 @@ void ATerraDyneEditController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void ATerraDyneEditController::OnLeftClickStart()
 {
+	if (!bEnablePlayModeToolUI)
+	{
+		bIsClicking = false;
+		return;
+	}
+
 	bIsClicking = true;
 	bFlattenHeightLocked = false;  // Reset lock each new press
 	bStrokeBegun = false;
@@ -116,6 +240,14 @@ void ATerraDyneEditController::OnLeftClickStart()
 
 void ATerraDyneEditController::OnLeftClickStop()
 {
+	if (!bEnablePlayModeToolUI)
+	{
+		bIsClicking = false;
+		bFlattenHeightLocked = false;
+		bStrokeBegun = false;
+		return;
+	}
+
 	bIsClicking = false;
 	bFlattenHeightLocked = false;
 	if (bStrokeBegun)
@@ -138,6 +270,11 @@ void ATerraDyneEditController::OnLeftClickStop()
 
 void ATerraDyneEditController::OnUndoPressed()
 {
+	if (!bEnablePlayModeToolUI)
+	{
+		return;
+	}
+
 	if (HasAuthority())
 	{
 		UWorld* World = GetWorld();
@@ -156,6 +293,11 @@ void ATerraDyneEditController::OnUndoPressed()
 
 void ATerraDyneEditController::OnRedoPressed()
 {
+	if (!bEnablePlayModeToolUI)
+	{
+		return;
+	}
+
 	if (HasAuthority())
 	{
 		UWorld* World = GetWorld();
@@ -174,23 +316,170 @@ void ATerraDyneEditController::OnRedoPressed()
 
 // --- Server RPCs ---
 
+bool ATerraDyneEditController::IsRemoteTerrainEditAuthorized_Implementation(const FTerraDyneBrushParams& Params) const
+{
+	return bAllowRemoteTerrainEditing;
+}
+
+bool ATerraDyneEditController::ConsumeBrushRequestToken()
+{
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const float Rate = Settings ? FMath::Max(1.0f, Settings->MaxBrushRPCsPerSecond) : 30.0f;
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (AvailableBrushRequestTokens < 0.0f)
+	{
+		AvailableBrushRequestTokens = Rate;
+		LastBrushTokenRefillSeconds = Now;
+	}
+	const double Elapsed = FMath::Max(0.0, Now - LastBrushTokenRefillSeconds);
+	AvailableBrushRequestTokens = FMath::Min(Rate, AvailableBrushRequestTokens + static_cast<float>(Elapsed) * Rate);
+	LastBrushTokenRefillSeconds = Now;
+	if (AvailableBrushRequestTokens < 1.0f)
+	{
+		return false;
+	}
+	AvailableBrushRequestTokens -= 1.0f;
+	return true;
+}
+
+void ATerraDyneEditController::LogRejectedBrushRequest(const FString& Reason)
+{
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (Now - LastBrushRejectionLogSeconds >= 1.0)
+	{
+		LastBrushRejectionLogSeconds = Now;
+		UE_LOG(LogTerraDyne, Warning, TEXT("Rejected remote terrain edit from %s: %s"), *GetNameSafe(this), *Reason);
+	}
+}
+
+bool ATerraDyneEditController::ValidateRemoteBrushRequest(
+	const FTerraDyneBrushParams& Params,
+	ATerraDyneManager* Manager,
+	FString& OutReason)
+{
+	if (!Manager || !bAllowRemoteTerrainEditing || !IsRemoteTerrainEditAuthorized(Params))
+	{
+		OutReason = TEXT("remote terrain editing is not authorized");
+		return false;
+	}
+	if (!ConsumeBrushRequestToken())
+	{
+		OutReason = TEXT("brush request rate exceeded");
+		return false;
+	}
+
+	const FVector WorldLocation(Params.WorldLocation);
+	if (WorldLocation.ContainsNaN() || !FMath::IsFinite(Params.Radius) ||
+		!FMath::IsFinite(Params.Strength) || !FMath::IsFinite(Params.FlattenHeight))
+	{
+		OutReason = TEXT("request contains a non-finite value");
+		return false;
+	}
+	if (static_cast<uint8>(Params.BrushMode) > static_cast<uint8>(ETerraDyneBrushMode::Paint) ||
+		static_cast<uint8>(Params.TargetLayer) > static_cast<uint8>(ETerraDyneLayer::Active))
+	{
+		OutReason = TEXT("request contains an invalid brush mode or target layer");
+		return false;
+	}
+
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const float MaxRadius = Settings ? Settings->MaxBrushRadius : 10000.0f;
+	const float MaxStrength = Settings ? Settings->MaxBrushStrength : 5000.0f;
+	if (Params.Radius <= 0.0f || Params.Radius > MaxRadius || FMath::Abs(Params.Strength) > MaxStrength)
+	{
+		OutReason = TEXT("brush radius or strength exceeds the server limit");
+		return false;
+	}
+	if (Params.WeightLayerIndex < 0 || Params.WeightLayerIndex >= ATerraDyneChunk::NumWeightLayers)
+	{
+		OutReason = TEXT("paint layer index is invalid");
+		return false;
+	}
+
+	const AActor* ReferenceActor = GetPawn();
+	if (!ReferenceActor)
+	{
+		ReferenceActor = GetViewTarget();
+	}
+	const float MaxDistance = Settings ? Settings->MaxBrushDistanceFromOwner : 25000.0f;
+	if (MaxDistance > 0.0f && (!ReferenceActor ||
+		FVector::DistSquared(ReferenceActor->GetActorLocation(), WorldLocation) > FMath::Square(MaxDistance)))
+	{
+		OutReason = TEXT("brush is too far from the controlled pawn or view target");
+		return false;
+	}
+
+	const TArray<ATerraDyneChunk*> AffectedChunks = Manager->GetChunksInRadius(WorldLocation, Params.Radius);
+	const int32 MaxAffectedChunks = Settings ? Settings->MaxAffectedChunksPerBrush : 16;
+	if (AffectedChunks.Num() == 0 || AffectedChunks.Num() > MaxAffectedChunks)
+	{
+		OutReason = TEXT("brush affects no editable chunk or exceeds the chunk-cost budget");
+		return false;
+	}
+
+	if (Params.bIsStrokeStart)
+	{
+		if (Manager->HasPendingStroke(this))
+		{
+			OutReason = TEXT("a stroke is already active");
+			return false;
+		}
+	}
+	else if (!Manager->HasPendingStroke(this))
+	{
+		OutReason = TEXT("brush continuation has no active stroke");
+		return false;
+	}
+
+	if (Params.BrushMode == ETerraDyneBrushMode::Flatten)
+	{
+		ATerraDyneChunk* Chunk = Manager->GetChunkAtLocation(WorldLocation);
+		const float MaxFlattenDelta = Settings ? Settings->MaxFlattenHeightDelta : 10000.0f;
+		if (!Chunk || FMath::Abs(
+			Params.FlattenHeight - Chunk->GetHeightAtLocation(WorldLocation - Chunk->GetActorLocation())) > MaxFlattenDelta)
+		{
+			OutReason = TEXT("flatten target exceeds the server height-delta limit");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void ATerraDyneEditController::Server_ApplyBrush_Implementation(const FTerraDyneBrushParams& Params)
 {
 	UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr;
 	ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr;
-	if (!Manager) return;
+	FString RejectionReason;
+	if (!ValidateRemoteBrushRequest(Params, Manager, RejectionReason))
+	{
+		LogRejectedBrushRequest(RejectionReason);
+		return;
+	}
 
 	if (Params.bIsStrokeStart)
 	{
 		Manager->BeginStroke(Params.WorldLocation, Params.Radius, this);
 	}
 
-	Manager->ApplyGlobalBrush(Params.WorldLocation, Params.Radius, Params.Strength, Params.BrushMode, Params.WeightLayerIndex, Params.FlattenHeight);
+	Manager->ApplyGlobalBrush(
+		Params.WorldLocation,
+		Params.Radius,
+		Params.Strength,
+		Params.BrushMode,
+		Params.TargetLayer,
+		Params.WeightLayerIndex,
+		Params.FlattenHeight);
 	Manager->Multicast_ApplyBrush(Params);
 }
 
 void ATerraDyneEditController::Server_CommitStroke_Implementation()
 {
+	if (!bAllowRemoteTerrainEditing || !ConsumeBrushRequestToken())
+	{
+		return;
+	}
+
 	UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr;
 	if (ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr)
 	{
@@ -200,6 +489,11 @@ void ATerraDyneEditController::Server_CommitStroke_Implementation()
 
 void ATerraDyneEditController::Server_Undo_Implementation()
 {
+	if (!bAllowRemoteTerrainEditing || !ConsumeBrushRequestToken())
+	{
+		return;
+	}
+
 	UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr;
 	if (ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr)
 	{
@@ -209,6 +503,11 @@ void ATerraDyneEditController::Server_Undo_Implementation()
 
 void ATerraDyneEditController::Server_Redo_Implementation()
 {
+	if (!bAllowRemoteTerrainEditing || !ConsumeBrushRequestToken())
+	{
+		return;
+	}
+
 	UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr;
 	if (ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr)
 	{
@@ -216,7 +515,7 @@ void ATerraDyneEditController::Server_Redo_Implementation()
 	}
 }
 
-void ATerraDyneEditController::Client_ReceiveChunkSync_Implementation(const FTerraDyneChunkData& Data)
+void ATerraDyneEditController::Client_ReceiveChunkSync(const FTerraDyneChunkData& Data)
 {
 	UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr;
 	ATerraDyneManager* Manager = Sys ? Sys->GetTerrainManager() : nullptr;
@@ -231,19 +530,24 @@ void ATerraDyneEditController::Client_ReceiveChunkSync_Implementation(const FTer
 	{
 		Chunk->LoadFromData(Data);
 		PendingChunkSyncs.Remove(Data.Coordinate);
-		UE_LOG(LogTemp, Log, TEXT("Client chunk sync: updated chunk [%d,%d]"),
+		UE_LOG(LogTerraDyne, Log, TEXT("Client chunk sync: updated chunk [%d,%d]"),
 			Data.Coordinate.X, Data.Coordinate.Y);
 	}
 	else
 	{
 		PendingChunkSyncs.Add(Data.Coordinate, Data);
-		UE_LOG(LogTemp, Warning, TEXT("Client chunk sync: chunk [%d,%d] not ready yet, queued for retry."),
+		UE_LOG(LogTerraDyne, Warning, TEXT("Client chunk sync: chunk [%d,%d] not ready yet, queued for retry."),
 			Data.Coordinate.X, Data.Coordinate.Y);
 	}
 }
 
 void ATerraDyneEditController::OnMouseWheel(float Val)
 {
+	if (!bEnablePlayModeToolUI)
+	{
+		return;
+	}
+
 	if (Val != 0.0f)
 	{
 		BrushRadius = FMath::Clamp(BrushRadius + Val * 200.0f, 100.0f, 10000.0f);
@@ -312,16 +616,25 @@ void ATerraDyneEditController::Tick(float DeltaTime)
 			PendingChunkSyncs.Remove(Coord);
 		}
 	}
+
+	if (!bEnablePlayModeToolUI)
+	{
+		if (BrushDecal)
+		{
+			BrushDecal->SetVisibility(false);
+		}
+		return;
+	}
 	
 	APawn* MyPawn = GetPawn();
 	if (!MyPawn) return;
 	
 	FHitResult Hit;
 	bool bHit = GetTerrainHit(Hit);
-	
+
 	// Get player location for reference
 	FVector PlayerLoc = MyPawn->GetActorLocation();
-	
+
 	// Read current tool settings from UI (sync with UI)
 	ETerraDyneToolMode ToolMode = CurrentTool;
 	float CurrentRadius = BrushRadius;
@@ -329,6 +642,31 @@ void ATerraDyneEditController::Tick(float DeltaTime)
 	{
 		ToolMode = ActiveUI->CurrentTool;
 		CurrentRadius = ActiveUI->BrushRadius;
+	}
+
+	// Update brush preview decal
+	if (BrushDecal)
+	{
+		if (bHit)
+		{
+			BrushDecal->SetWorldLocation(Hit.Location);
+			BrushDecal->DecalSize = FVector(10000.0f, CurrentRadius, CurrentRadius);
+			BrushDecal->SetVisibility(true);
+
+			if (BrushDecalMID)
+			{
+				BrushDecalMID->SetScalarParameterValue(TEXT("Radius"), CurrentRadius);
+				// Color by tool mode: orange for paint, blue for sculpt
+				FLinearColor BrushColor = (ToolMode == ETerraDyneToolMode::Paint)
+					? FLinearColor(0.8f, 0.5f, 0.2f, 1.0f)
+					: FLinearColor(0.25f, 0.5f, 1.0f, 1.0f);
+				BrushDecalMID->SetVectorParameterValue(TEXT("Color"), BrushColor);
+			}
+		}
+		else
+		{
+			BrushDecal->SetVisibility(false);
+		}
 	}
 	
 	if (bHit)
@@ -390,7 +728,15 @@ void ATerraDyneEditController::Tick(float DeltaTime)
 
 void ATerraDyneEditController::PerformToolAction(const FVector& Location)
 {
-	UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>();
+	if (!bEnablePlayModeToolUI)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+	
+	UTerraDyneSubsystem* Sys = World->GetSubsystem<UTerraDyneSubsystem>();
 	if (!Sys) return;
 	ATerraDyneManager* Manager = Sys->GetTerrainManager();
 	if (!Manager) return;
@@ -411,6 +757,7 @@ void ATerraDyneEditController::PerformToolAction(const FVector& Location)
 	// Map ETerraDyneToolMode → ETerraDyneBrushMode
 	ETerraDyneBrushMode BrushMode = ETerraDyneBrushMode::Raise;
 	float FlattenHeight = 0.f;
+	ETerraDyneLayer TargetLayer = Manager->ActiveLayer;
 
 	switch (ToolMode)
 	{
@@ -456,6 +803,7 @@ void ATerraDyneEditController::PerformToolAction(const FVector& Location)
 	Params.Radius = UseRadius;
 	Params.Strength = UseStrength;
 	Params.BrushMode = BrushMode;
+	Params.TargetLayer = TargetLayer;
 	Params.WeightLayerIndex = LayerIndex;
 	Params.FlattenHeight = FlattenHeight;
 	Params.bIsStrokeStart = bFirstClick;
@@ -467,7 +815,7 @@ void ATerraDyneEditController::PerformToolAction(const FVector& Location)
 		{
 			Manager->BeginStroke(Location, UseRadius, this);
 		}
-		Manager->ApplyGlobalBrush(Location, UseRadius, UseStrength, BrushMode, LayerIndex, FlattenHeight);
+		Manager->ApplyGlobalBrush(Location, UseRadius, UseStrength, BrushMode, TargetLayer, LayerIndex, FlattenHeight);
 		Manager->Multicast_ApplyBrush(Params);
 	}
 	else

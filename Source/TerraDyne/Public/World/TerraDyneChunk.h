@@ -14,6 +14,7 @@ UCLASS()
 class TERRADYNE_API ATerraDyneChunk : public AActor
 {
 	GENERATED_BODY()
+	friend class FTerraDyneChunkMeshBuildTask;
 
 public:
 	ATerraDyneChunk();
@@ -64,11 +65,15 @@ public:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextureRenderTarget2D> HeightRT_Swap; // Ping-pong write target for GPU brush
 
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> HeightUploadTexture;
+
 	// --- Height Buffers ---
 	TArray<float> BaseBuffer;
 	TArray<float> SculptBuffer;
 	TArray<float> DetailBuffer;
 	TArray<float> HeightBuffer;
+	TArray<float> SmoothScratchBuffer;
 
 	// --- Weight Buffers (paint layers 0-3) ---
 	static constexpr int32 NumWeightLayers = 4;
@@ -101,11 +106,13 @@ public:
 		float Radius,
 		float Strength,
 		ETerraDyneBrushMode BrushMode,
+		ETerraDyneLayer TargetLayer = ETerraDyneLayer::Sculpt,
 		int32 WeightLayerIndex = 0,
 		float FlattenHeight = 0.f);
 
 	void RebuildPhysicsMesh();
 	float GetHeightAtLocation(FVector LocalPos) const;
+	float GetWeightAtLocation(FVector LocalPos, int32 LayerIndex) const;
 	bool IsUsingGPU() const { return bUseGPU; }
 	FBox GetWorldBounds() const;
 
@@ -143,7 +150,7 @@ public:
 	bool GetTransferredActorFoliageInstanceTransform(int32 InstanceIndex, FTransform& OutTransform) const;
 
 	// Persistence
-	struct FTerraDyneChunkData GetSerializedData();
+	struct FTerraDyneChunkData GetSerializedData() const;
 	void LoadFromData(const struct FTerraDyneChunkData& Data);
 
 	// LOD & Optimization
@@ -157,11 +164,16 @@ protected:
 private:
 	bool bInitialized;
 	bool bUseGPU;
+	bool bHeightRTReadbackIsVerticallyFlipped;
+	bool bSkipHeightRenderTargetUploadOnNextMeshRebuild;
 	void UpdateDisplayMaterialParameters();
 	
 	// Collision Throttling
 	float CollisionDebounceTimer;
 	bool bCollisionDirty;
+
+	// Mesh Throttling
+	bool bMeshDirty = false;
 
 	// Grass Debounce
 	float GrassDebounceTimer;
@@ -185,10 +197,34 @@ private:
 
 	bool SetupGPU();
 	void UpdateRenderTargetFromHeightmap();
-	void ReadbackRenderTarget();
-	void ApplyBrushGPU(FVector LocalPos, float Radius, float Strength);
+	bool ApplyBrushGPU(
+		FVector LocalPos,
+		float Radius,
+		float Strength,
+		ETerraDyneBrushMode BrushMode,
+		ETerraDyneLayer TargetLayer,
+		float FlattenHeight);
+	bool HasTerrainMeshTopology() const;
+	void BuildTerrainSurfaceSamples(TArray<FVector3d>& OutVertexPositions, TArray<FVector3f>& OutVertexNormals) const;
+	void InitializeTerrainMeshTopology(const TArray<FVector3d>& VertexPositions, const TArray<FVector3f>& VertexNormals);
+	void UpdateTerrainMeshSurface(const TArray<FVector3d>& VertexPositions, const TArray<FVector3f>& VertexNormals);
+	void StartAsyncMeshBuild();
+	void ApplyPendingMeshBuild();
+	void ReceiveAsyncMeshBuildResult(
+		int32 BuildSerial,
+		bool bCanReuseTopology,
+		TArray<FVector3d>&& VertexPositions,
+		TArray<FVector3f>&& VertexNormals);
 	void RebuildMesh();
 	void UpdateCollision();
 	void ClearTransferredFoliageComponents();
 	void ClearTransferredActorFoliageActors();
+
+	TArray<FVector3d> PendingMeshVertexPositions;
+	TArray<FVector3f> PendingMeshVertexNormals;
+	int32 PendingMeshBuildSerial = INDEX_NONE;
+	int32 RequestedMeshBuildSerial = 0;
+	int32 InFlightMeshBuildSerial = INDEX_NONE;
+	bool bPendingMeshCanReuseTopology = false;
+	bool bMeshBuildInFlight = false;
 };

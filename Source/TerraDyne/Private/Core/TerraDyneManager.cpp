@@ -1,12 +1,17 @@
 // Copyright (c) 2026 GregOrigin. All Rights Reserved.
 #include "Core/TerraDyneManager.h"
 #include "Core/TerraDyneSubsystem.h"
+#include "TerraDyneModule.h"
 #include "Core/TerraDyneSaveGame.h"
 #include "Core/TerraDyneWorldPreset.h"
 #include "Settings/TerraDyneSettings.h"
 #include "World/TerraDyneChunk.h"
+#include "World/TerraDyneLandscapeAssetSet.h"
 #include "World/TerraDyneOrchestrator.h"
 #include "Core/TerraDyneEditController.h"
+#include "Core/TerraDyneReplicationComponent.h"
+#include "IO/TerraDyneAsyncSaver.h"
+#include "IO/TerraDyneSerializer.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
@@ -24,19 +29,52 @@
 #include "Serialization/MemoryReader.h"
 #include "HAL/FileManager.h"
 #include "Misc/Compression.h"
+#include "Misc/App.h"
 #include "Engine/StaticMeshActor.h"
+#include "LandscapeLayerInfoObject.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInterface.h"
 
 #if WITH_EDITOR
+#include "Landscape.h"
 #include "LandscapeProxy.h"
 #include "LandscapeComponent.h"
 #include "LandscapeLayerInfoObject.h"
 #include "LandscapeInfo.h"
 #include "LandscapeEdit.h"
 #include "LandscapeDataAccess.h"
+#include "Materials/MaterialExpressionLandscapeGrassOutput.h"
+#include "Materials/MaterialExpressionLandscapeLayerBlend.h"
+#include "Materials/MaterialExpressionLandscapeLayerCoords.h"
+#include "Materials/MaterialExpressionLandscapeLayerSample.h"
+#include "Materials/MaterialExpressionLandscapeLayerSwitch.h"
+#include "Materials/MaterialExpressionLandscapeLayerWeight.h"
+#include "Materials/MaterialExpressionLandscapeVisibilityMask.h"
 #include "InstancedFoliageActor.h"
 #include "FoliageType_Actor.h"
 #include "FoliageType_InstancedStaticMesh.h"
 #endif
+
+namespace
+{
+	static void PreparePopulationActorForRuntimePlacement(AActor* Actor)
+	{
+		if (!Actor)
+		{
+			return;
+		}
+
+		TArray<USceneComponent*> SceneComponents;
+		Actor->GetComponents<USceneComponent>(SceneComponents);
+		for (USceneComponent* SceneComponent : SceneComponents)
+		{
+			if (SceneComponent && SceneComponent->Mobility != EComponentMobility::Movable)
+			{
+				SceneComponent->SetMobility(EComponentMobility::Movable);
+			}
+		}
+	}
+}
 
 namespace TerraDyneWorldFramework
 {
@@ -60,13 +98,68 @@ namespace TerraDyneWorldFramework
 
 		return FMath::FloorToInt((LocalAxis + (ChunkSize * 0.5f)) / ChunkSize);
 	}
+
+#if WITH_EDITOR
+	static bool UsesLandscapeOnlyMaterialExpressions(const UMaterialInterface* MaterialInterface)
+	{
+		const UMaterial* Material = MaterialInterface ? MaterialInterface->GetMaterial() : nullptr;
+		if (!Material)
+		{
+			return false;
+		}
+
+		return Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeGrassOutput>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeLayerBlend>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeLayerCoords>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeLayerSample>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeLayerSwitch>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeLayerWeight>() ||
+			Material->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeVisibilityMask>();
+	}
+
+	static void HideLandscapeHierarchy(ALandscapeProxy* SourceLandscape)
+	{
+		if (!SourceLandscape)
+		{
+			return;
+		}
+
+		TSet<ALandscapeProxy*> LandscapesToHide;
+		LandscapesToHide.Add(SourceLandscape);
+
+		if (ULandscapeInfo* LandscapeInfo = SourceLandscape->GetLandscapeInfo())
+		{
+			LandscapeInfo->ForEachLandscapeProxy([&LandscapesToHide](ALandscapeProxy* Proxy)
+			{
+				if (Proxy)
+				{
+					LandscapesToHide.Add(Proxy);
+				}
+
+				return true;
+			});
+		}
+
+		for (ALandscapeProxy* LandscapeProxy : LandscapesToHide)
+		{
+			if (!LandscapeProxy)
+			{
+				continue;
+			}
+
+			LandscapeProxy->SetActorHiddenInGame(true);
+			LandscapeProxy->SetIsTemporarilyHiddenInEditor(true);
+		}
+	}
+#endif
 }
 
 ATerraDyneManager::ATerraDyneManager()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
-	bAlwaysRelevant = true;
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	bAlwaysRelevant = Settings ? Settings->bManagerAlwaysRelevant : false;
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 	GlobalChunkSize = 10000.0f;
@@ -97,7 +190,7 @@ void ATerraDyneManager::BeginPlay()
 {
 	Super::BeginPlay();
 
-	UE_LOG(LogTemp, Log, TEXT("TerraDyneManager: Starting initialization..."));
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyneManager: Starting initialization..."));
 
 	// Register with subsystem
 	if (UTerraDyneSubsystem* Subsystem = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
@@ -140,7 +233,7 @@ void ATerraDyneManager::BeginPlay()
 #if WITH_EDITOR
 		if (bAutoImportAtRuntime && TargetLandscapeSource)
 		{
-			ImportInternal(TargetLandscapeSource, LandscapeMigrationOptions);
+			ImportFromLandscapeWithOptions(TargetLandscapeSource, LandscapeMigrationOptions);
 			bChunkMapDirty = true;
 		}
 		else
@@ -156,6 +249,9 @@ void ATerraDyneManager::BeginPlay()
 			SetupLighting();
 		}
 
+		// Showcase spawning is now exclusively handled by ATerraDyneSceneSetup.
+		// bSpawnShowcaseOnBeginPlay is deprecated and safely ignored.
+		/*
 		if (bSpawnShowcaseOnBeginPlay)
 		{
 			TArray<AActor*> ExistingOrch;
@@ -165,6 +261,7 @@ void ATerraDyneManager::BeginPlay()
 				GetWorld()->SpawnActor<ATerraDyneOrchestrator>(ATerraDyneOrchestrator::StaticClass(), FVector(0, 0, 5000), FRotator::ZeroRotator);
 			}
 		}
+		*/
 
 		if (bChunkMapDirty)
 		{
@@ -177,9 +274,9 @@ void ATerraDyneManager::BeginPlay()
 	}
 
 	// Debug: List all chunks
-	UE_LOG(LogTemp, Log, TEXT("Active chunks: %d"), ActiveChunkMap.Num());
+	UE_LOG(LogTerraDyne, Log, TEXT("Active chunks: %d"), ActiveChunkMap.Num());
 	
-	UE_LOG(LogTemp, Log, TEXT("TerraDyneManager: Initialization complete"));
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyneManager: Initialization complete"));
 }
 
 void ATerraDyneManager::Tick(float DeltaTime)
@@ -193,6 +290,30 @@ void ATerraDyneManager::Tick(float DeltaTime)
 		{
 			TickPopulationState(0.25f);
 			PopulationMaintenanceTimer = 0.25f;
+		}
+
+		const double NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		for (auto It = ChunkCacheRetryAfterSeconds.CreateIterator(); It; ++It)
+		{
+			if (It.Value() <= NowSeconds)
+			{
+				const FIntPoint Coord = It.Key();
+				It.RemoveCurrent();
+				if (const FTerraDyneChunkData* PendingData = PendingChunkCacheWrites.Find(Coord))
+				{
+					SaveChunkToCache(Coord, *PendingData);
+				}
+				break;
+			}
+		}
+
+		if (PendingNavigationDirtyAreas.Num() > 0)
+		{
+			NavigationDirtyTimer -= DeltaTime;
+			if (NavigationDirtyTimer <= 0.0f)
+			{
+				FlushPendingNavigationDirtyAreas();
+			}
 		}
 	}
 
@@ -237,37 +358,105 @@ void ATerraDyneManager::Tick(float DeltaTime)
 		}
 
 		// LOD (all roles) — each chunk uses nearest player
-		for (auto& Pair : ActiveChunkMap)
+		// TODO: Time-slice LOD updates — process a fixed budget of ~50 chunks per frame
+		// instead of iterating the entire ActiveChunkMap to avoid periodic hitches.
+		if (ActiveChunkMap.Num() > 0)
 		{
-			if (!Pair.Value) continue;
-
-			float MinDistSq = MAX_FLT;
-			FVector NearestPos = PlayerPositions[0];
-			for (const FVector& Pos : PlayerPositions)
+			TArray<ATerraDyneChunk*> Chunks;
+			ActiveChunkMap.GenerateValueArray(Chunks);
+			int32 ProcessedCount = 0;
+			const int32 Budget = 64;
+			
+			while (ProcessedCount < Budget)
 			{
-				float DistSq = FVector::DistSquared(Pos, Pair.Value->GetActorLocation());
-				if (DistSq < MinDistSq)
+				if (LODUpdateCursor >= Chunks.Num())
 				{
-					MinDistSq = DistSq;
-					NearestPos = Pos;
+					LODUpdateCursor = 0;
+					break;
 				}
+				
+				ATerraDyneChunk* Chunk = Chunks[LODUpdateCursor];
+				if (Chunk)
+				{
+					float MinDistSq = MAX_FLT;
+					FVector NearestPos = PlayerPositions[0];
+					for (const FVector& Pos : PlayerPositions)
+					{
+						float DistSq = FVector::DistSquared(Pos, Chunk->GetActorLocation());
+						if (DistSq < MinDistSq)
+						{
+							MinDistSq = DistSq;
+							NearestPos = Pos;
+						}
+					}
+					Chunk->UpdateLOD(NearestPos);
+				}
+				
+				LODUpdateCursor++;
+				ProcessedCount++;
 			}
-			Pair.Value->UpdateLOD(NearestPos);
 		}
 	}
+
+#if !UE_BUILD_SHIPPING
+	if (bShowDebugOverlay)
+	{
+		const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+		const float ChunkSize = Settings ? Settings->DefaultChunkSize : 10000.0f;
+
+		for (const auto& Pair : ActiveChunkMap)
+		{
+			const FIntPoint& Coord = Pair.Key;
+			ATerraDyneChunk* Chunk = Pair.Value;
+			if (!Chunk) continue;
+
+			FVector Center = Chunk->GetActorLocation();
+			FVector Extent(ChunkSize * 0.5f, ChunkSize * 0.5f, 5000.0f);
+
+			// Color by state
+			FColor BoxColor = FColor::Green; // Loaded, idle
+			if (PendingLoadQueue.Contains(Coord))
+			{
+				BoxColor = FColor::Yellow;
+			}
+			else if (PendingUnloadQueue.Contains(Coord))
+			{
+				BoxColor = FColor::Red;
+			}
+			else if (ImportedChunkCoords.Contains(Coord))
+			{
+				BoxColor = FColor::Cyan;
+			}
+
+			DrawDebugBox(GetWorld(), Center, Extent, BoxColor, false, -1.0f, 0, 3.0f);
+
+			// Label
+			FString Label = FString::Printf(TEXT("[%d,%d] Verts:%d"), Coord.X, Coord.Y, Chunk->HeightBuffer.Num());
+			DrawDebugString(GetWorld(), Center + FVector(0, 0, 5000.0f), Label, nullptr, BoxColor, -1.0f, true);
+		}
+	}
+#endif
 }
 
 void ATerraDyneManager::LoadMaterials()
 {
-	if (bMaterialsLoaded) return;
+	TRACE_CPUPROFILER_EVENT_SCOPE(TerraDyne_LoadMaterials);
+	// TODO: Consider async loading (StreamableManager) to avoid blocking the game thread.
 
-	UE_LOG(LogTemp, Log, TEXT("Loading TerraDyne materials..."));
+	if (bMaterialsLoaded) return;
+	if (!FApp::CanEverRender() || IsRunningDedicatedServer())
+	{
+		bMaterialsLoaded = true;
+		return;
+	}
+
+	UE_LOG(LogTerraDyne, Log, TEXT("Loading TerraDyne materials..."));
 
 	// [N-2] Guard: CDO lookup can return nullptr during hot-reload edge cases
 	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
 	if (!Settings)
 	{
-		UE_LOG(LogTemp, Error, TEXT("TerraDyneSettings CDO not found"));
+		UE_LOG(LogTerraDyne, Error, TEXT("TerraDyneSettings CDO not found"));
 		return;
 	}
 
@@ -280,11 +469,17 @@ void ATerraDyneManager::LoadMaterials()
 	// Final fallback
 	if (MasterMaterial)
 	{
-		UE_LOG(LogTemp, Log, TEXT("MasterMaterial loaded: %s"), *MasterMaterial->GetName());
+		UE_LOG(LogTerraDyne, Log, TEXT("MasterMaterial loaded: %s"), *MasterMaterial->GetName());
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Failed to load MasterMaterial, using Engine Basic Shape"));
+		UE_LOG(LogTerraDyne, Warning, TEXT("Failed to load MasterMaterial, using Engine Basic Shape"));
+		if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+		{
+			Sys->ShowNotification(
+				FText::FromString(TEXT("TerraDyne: Master material not found, using fallback.")),
+				ETerraDyneNotifySeverity::Warning);
+		}
 		MasterMaterial = LoadObject<UMaterialInterface>(nullptr,
 			TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	}
@@ -300,6 +495,8 @@ void ATerraDyneManager::LoadMaterials()
 
 void ATerraDyneManager::SetupLighting()
 {
+	if (!FApp::CanEverRender() || IsRunningDedicatedServer()) return;
+
 	// [N-4] Early-return if a DirectionalLight already exists — prevents duplicates on re-entry
 	TArray<AActor*> Lights;
 	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADirectionalLight::StaticClass(), Lights);
@@ -331,7 +528,7 @@ void ATerraDyneManager::SetupLighting()
 
 void ATerraDyneManager::SpawnDefaultSandboxChunk()
 {
-	UE_LOG(LogTemp, Log, TEXT("Spawning 3x3 chunk grid..."));
+	UE_LOG(LogTerraDyne, Log, TEXT("Spawning 3x3 chunk grid..."));
 	
 	for (int32 X = -1; X <= 1; X++)
 	{
@@ -346,20 +543,27 @@ void ATerraDyneManager::SpawnDefaultSandboxChunk()
 				DrawDebugBox(GetWorld(), Chunk->GetActorLocation(), FVector(GlobalChunkSize/2, GlobalChunkSize/2, 1000), 
 					FColor::Green, true, 10.0f, 0, 10.0f);
 				
-				UE_LOG(LogTemp, Log, TEXT("Spawned chunk [%d,%d] at %s"), X, Y, *Chunk->GetActorLocation().ToString());
+				UE_LOG(LogTerraDyne, Log, TEXT("Spawned chunk [%d,%d] at %s"), X, Y, *Chunk->GetActorLocation().ToString());
 			}
 			else
 			{
-				UE_LOG(LogTemp, Error, TEXT("FAILED to spawn chunk [%d,%d]"), X, Y);
+				UE_LOG(LogTerraDyne, Error, TEXT("FAILED to spawn chunk [%d,%d]"), X, Y);
+				if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+				{
+					Sys->ShowNotification(
+						FText::Format(NSLOCTEXT("TerraDyne", "SpawnFail", "Failed to spawn chunk [{0},{1}]"),
+							FText::AsNumber(X), FText::AsNumber(Y)),
+						ETerraDyneNotifySeverity::Error);
+				}
 			}
 		}
 	}
 }
 
 void ATerraDyneManager::ApplyGlobalBrush(FVector WorldLocation, float Radius, float Strength,
-	ETerraDyneBrushMode BrushMode, int32 WeightLayerIndex, float FlattenHeight)
+	ETerraDyneBrushMode BrushMode, ETerraDyneLayer TargetLayer, int32 WeightLayerIndex, float FlattenHeight)
 {
-	UE_LOG(LogTemp, Verbose, TEXT("ApplyGlobalBrush: Loc=%s R=%.0f S=%.0f Mode=%d"),
+	UE_LOG(LogTerraDyne, Verbose, TEXT("ApplyGlobalBrush: Loc=%s R=%.0f S=%.0f Mode=%d"),
 		*WorldLocation.ToString(), Radius, Strength, (int32)BrushMode);
 
 	TArray<FIntPoint> ChangedCoords;
@@ -379,7 +583,7 @@ void ATerraDyneManager::ApplyGlobalBrush(FVector WorldLocation, float Radius, fl
 				if (ATerraDyneChunk* Chunk = *FoundChunk)
 				{
 					FVector RelativePos = WorldLocation - Chunk->GetActorLocation();
-					Chunk->ApplyLocalIdempotentEdit(RelativePos, Radius, Strength, BrushMode, WeightLayerIndex, FlattenHeight);
+					Chunk->ApplyLocalIdempotentEdit(RelativePos, Radius, Strength, BrushMode, TargetLayer, WeightLayerIndex, FlattenHeight);
 					MarkChunkDirty(Coord);
 					ChangedCoords.AddUnique(Coord);
 				}
@@ -408,6 +612,26 @@ ATerraDyneChunk* ATerraDyneManager::GetChunkAtLocation(FVector WorldLocation) co
 {
 	if (ATerraDyneChunk* const* Chunk = ActiveChunkMap.Find(WorldToChunkCoord(WorldLocation))) return *Chunk;
 	return nullptr;
+}
+
+float ATerraDyneManager::GetWorldHeightAtLocation(FVector WorldLocation) const
+{
+	if (ATerraDyneChunk* Chunk = GetChunkAtLocation(WorldLocation))
+	{
+		FVector LocalPos = WorldLocation - Chunk->GetActorLocation();
+		return Chunk->GetHeightAtLocation(LocalPos) + Chunk->GetActorLocation().Z;
+	}
+	return WorldLocation.Z; // Fallback
+}
+
+float ATerraDyneManager::GetWorldWeightAtLocation(FVector WorldLocation, int32 LayerIndex) const
+{
+	if (ATerraDyneChunk* Chunk = GetChunkAtLocation(WorldLocation))
+	{
+		FVector LocalPos = WorldLocation - Chunk->GetActorLocation();
+		return Chunk->GetWeightAtLocation(LocalPos, LayerIndex);
+	}
+	return 0.f; // Fallback
 }
 
 TArray<ATerraDyneChunk*> ATerraDyneManager::GetChunksInRadius(FVector WorldLocation, float Radius)
@@ -445,6 +669,10 @@ void ATerraDyneManager::RegisterChunk(ATerraDyneChunk* Chunk)
 	}
 
 	ActiveChunkMap.Add(Chunk->GridCoordinate, Chunk);
+	if (HeightBrushMaterial)
+	{
+		Chunk->BrushMaterialBase = HeightBrushMaterial;
+	}
 	Chunk->SetMaterial(MasterMaterial);
 	Chunk->SetGrassProfile(ActiveGrassProfile);
 	Chunk->SetTransferredFoliageFollowsTerrain(LandscapeMigrationState.bTransferredFoliageFollowsTerrain);
@@ -473,21 +701,23 @@ void ATerraDyneManager::UnregisterChunk(ATerraDyneChunk* Chunk)
 
 void ATerraDyneManager::BeginStroke(FVector WorldLocation, float Radius, APlayerController* Controller)
 {
-	if (PendingStroke.IsSet() && PendingStrokeOwner != Controller)
+	// TODO: Consider copy-on-write or async snapshot to avoid hitch on brush click.
+	TRACE_CPUPROFILER_EVENT_SCOPE(TerraDyne_BeginStroke_Snapshot);
+	// PERF: Full buffer copy - consider copy-on-write for large chunks
+
+	if (!Controller)
 	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("BeginStroke: overwriting pending stroke from %s with stroke from %s — previous stroke discarded"),
-			*PendingStrokeOwner->GetName(), *Controller->GetName());
+		return;
 	}
-	PendingStroke.Reset();
-	PendingStrokeOwner = Controller;
 
 	FTerraDyneUndoEntry Entry;
 	for (ATerraDyneChunk* Chunk : GetChunksInRadius(WorldLocation, Radius))
 	{
 		FTerraDyneChunkSnapshot Snap;
 		Snap.Coordinate = Chunk->GridCoordinate;
+		Snap.BaseBuffer = Chunk->BaseBuffer;
 		Snap.SculptBuffer = Chunk->SculptBuffer;
+		Snap.DetailBuffer = Chunk->DetailBuffer;
 		Snap.WeightBuffers.SetNum(ATerraDyneChunk::NumWeightLayers);
 		for (int32 L = 0; L < ATerraDyneChunk::NumWeightLayers; L++)
 		{
@@ -495,17 +725,24 @@ void ATerraDyneManager::BeginStroke(FVector WorldLocation, float Radius, APlayer
 		}
 		Entry.Snapshots.Add(Chunk->GridCoordinate, MoveTemp(Snap));
 	}
-	PendingStroke = MoveTemp(Entry);
+	PendingStrokes.Add(Controller, MoveTemp(Entry));
 }
 
 void ATerraDyneManager::CommitStroke(APlayerController* Controller)
 {
-	if (!PendingStroke.IsSet() || PendingStrokeOwner != Controller) return;
+	if (!Controller)
+	{
+		return;
+	}
+
+	FTerraDyneUndoEntry PendingEntry;
+	if (!PendingStrokes.RemoveAndCopyValue(Controller, PendingEntry))
+	{
+		return;
+	}
 
 	TArray<FTerraDyneUndoEntry>& Stack = UndoStacks.FindOrAdd(Controller);
-	Stack.Add(MoveTemp(PendingStroke.GetValue()));
-	PendingStroke.Reset();
-	PendingStrokeOwner = nullptr;
+	Stack.Add(MoveTemp(PendingEntry));
 
 	int32 MaxHistory = 20;
 	if (const UTerraDyneSettings* S = GetDefault<UTerraDyneSettings>())
@@ -528,7 +765,9 @@ void ATerraDyneManager::RestoreSnapshots(const FTerraDyneUndoEntry& Entry)
 		if (!Chunk) continue;
 		const FTerraDyneChunkSnapshot& Snap = Pair.Value;
 
+		Chunk->BaseBuffer = Snap.BaseBuffer;
 		Chunk->SculptBuffer = Snap.SculptBuffer;
+		Chunk->DetailBuffer = Snap.DetailBuffer;
 		for (int32 L = 0; L < ATerraDyneChunk::NumWeightLayers; L++)
 		{
 			if (Snap.WeightBuffers.IsValidIndex(L))
@@ -540,7 +779,7 @@ void ATerraDyneManager::RestoreSnapshots(const FTerraDyneUndoEntry& Entry)
 			Chunk->SculptBuffer.Num() != ExpectedSize ||
 			Chunk->DetailBuffer.Num() != ExpectedSize)
 		{
-			UE_LOG(LogTemp, Warning,
+			UE_LOG(LogTerraDyne, Warning,
 				TEXT("RestoreSnapshots: buffer size mismatch on chunk %s — skipping HeightBuffer recompute"),
 				*Snap.Coordinate.ToString());
 		}
@@ -562,7 +801,7 @@ void ATerraDyneManager::RestoreSnapshots(const FTerraDyneUndoEntry& Entry)
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning,
+			UE_LOG(LogTerraDyne, Warning,
 				TEXT("RestoreSnapshots: chunk %s has invalid terrain sample count (%d vs %d); skipping rebuild."),
 				*Snap.Coordinate.ToString(), Chunk->HeightBuffer.Num(), MeshSamples);
 		}
@@ -599,7 +838,9 @@ void ATerraDyneManager::Undo(APlayerController* Controller)
 		if (!Chunk) continue;
 		FTerraDyneChunkSnapshot CurrentSnap;
 		CurrentSnap.Coordinate = Chunk->GridCoordinate;
+		CurrentSnap.BaseBuffer = Chunk->BaseBuffer;
 		CurrentSnap.SculptBuffer = Chunk->SculptBuffer;
+		CurrentSnap.DetailBuffer = Chunk->DetailBuffer;
 		CurrentSnap.WeightBuffers.SetNum(ATerraDyneChunk::NumWeightLayers);
 		for (int32 L = 0; L < ATerraDyneChunk::NumWeightLayers; L++)
 			CurrentSnap.WeightBuffers[L] = Chunk->WeightBuffers[L];
@@ -615,7 +856,7 @@ void ATerraDyneManager::Undo(APlayerController* Controller)
 		ATerraDyneChunk* Chunk = GetChunkAtCoord(Pair.Key);
 		if (!Chunk) continue;
 		FTerraDyneChunkData ChunkData = Chunk->GetSerializedData();
-		Multicast_SyncChunkState(Pair.Key, ChunkData.SculptData, ChunkData.WeightData);
+		Multicast_SyncChunkState(ChunkData);
 	}
 }
 
@@ -634,7 +875,9 @@ void ATerraDyneManager::Redo(APlayerController* Controller)
 		if (!Chunk) continue;
 		FTerraDyneChunkSnapshot CurrentSnap;
 		CurrentSnap.Coordinate = Chunk->GridCoordinate;
+		CurrentSnap.BaseBuffer = Chunk->BaseBuffer;
 		CurrentSnap.SculptBuffer = Chunk->SculptBuffer;
+		CurrentSnap.DetailBuffer = Chunk->DetailBuffer;
 		CurrentSnap.WeightBuffers.SetNum(ATerraDyneChunk::NumWeightLayers);
 		for (int32 L = 0; L < ATerraDyneChunk::NumWeightLayers; L++)
 			CurrentSnap.WeightBuffers[L] = Chunk->WeightBuffers[L];
@@ -650,22 +893,276 @@ void ATerraDyneManager::Redo(APlayerController* Controller)
 		ATerraDyneChunk* Chunk = GetChunkAtCoord(Pair.Key);
 		if (!Chunk) continue;
 		FTerraDyneChunkData ChunkData = Chunk->GetSerializedData();
-		Multicast_SyncChunkState(Pair.Key, ChunkData.SculptData, ChunkData.WeightData);
+		Multicast_SyncChunkState(ChunkData);
 	}
 }
 
 void ATerraDyneManager::ApplyGlobalNoise(float Strength, float Frequency, float Seed)
 {
-	UE_LOG(LogTemp, Warning, TEXT("ApplyGlobalNoise not implemented"));
+	if (ActiveChunkMap.Num() == 0)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("ApplyGlobalNoise: no active chunks to modify."));
+		return;
+	}
+
+	if (FMath::IsNearlyZero(Strength) || FMath::IsNearlyZero(Frequency))
+	{
+		UE_LOG(LogTerraDyne, Verbose,
+			TEXT("ApplyGlobalNoise skipped: Strength=%.3f Frequency=%.6f"), Strength, Frequency);
+		return;
+	}
+
+	TArray<FIntPoint> ChangedCoords;
+	const float NoiseFrequency = FMath::Abs(Frequency);
+	const FVector2D SeedOffset(Seed * 157.31f + 11.7f, Seed * 263.77f - 19.3f);
+
+	for (const auto& Pair : ActiveChunkMap)
+	{
+		ATerraDyneChunk* Chunk = Pair.Value;
+		if (!Chunk || Chunk->Resolution < 2 || Chunk->HeightBuffer.Num() != Chunk->Resolution * Chunk->Resolution)
+		{
+			continue;
+		}
+
+		const int32 NumSamples = Chunk->Resolution * Chunk->Resolution;
+		if (Chunk->BaseBuffer.Num() != NumSamples ||
+			Chunk->SculptBuffer.Num() != NumSamples ||
+			Chunk->DetailBuffer.Num() != NumSamples)
+		{
+			UE_LOG(LogTerraDyne, Warning,
+				TEXT("ApplyGlobalNoise: buffer size mismatch on chunk [%d,%d], skipping."),
+				Pair.Key.X, Pair.Key.Y);
+			continue;
+		}
+
+		TArray<float>* TargetBuffer = &Chunk->SculptBuffer;
+		if (ActiveLayer == ETerraDyneLayer::Base)
+		{
+			TargetBuffer = &Chunk->BaseBuffer;
+		}
+		else if (ActiveLayer == ETerraDyneLayer::Detail)
+		{
+			TargetBuffer = &Chunk->DetailBuffer;
+		}
+
+		const float StrengthNorm = Strength / FMath::Max(Chunk->ZScale, KINDA_SMALL_NUMBER);
+		const float Step = Chunk->WorldSize / static_cast<float>(Chunk->Resolution - 1);
+		const float HalfSize = Chunk->WorldSize * 0.5f;
+		const FVector ChunkOrigin = Chunk->GetActorLocation();
+
+		for (int32 Y = 0; Y < Chunk->Resolution; Y++)
+		{
+			for (int32 X = 0; X < Chunk->Resolution; X++)
+			{
+				const int32 Index = Y * Chunk->Resolution + X;
+				const float WorldX = ChunkOrigin.X - HalfSize + X * Step;
+				const float WorldY = ChunkOrigin.Y - HalfSize + Y * Step;
+
+				float Amplitude = 1.0f;
+				float OctaveFrequency = NoiseFrequency;
+				float NoiseSum = 0.0f;
+				float AmplitudeSum = 0.0f;
+				for (int32 Octave = 0; Octave < 3; Octave++)
+				{
+					const FVector2D SamplePoint(
+						WorldX * OctaveFrequency + SeedOffset.X,
+						WorldY * OctaveFrequency + SeedOffset.Y);
+					NoiseSum += FMath::PerlinNoise2D(SamplePoint) * Amplitude;
+					AmplitudeSum += Amplitude;
+					Amplitude *= 0.5f;
+					OctaveFrequency *= 2.0f;
+				}
+
+				const float SignedNoise = AmplitudeSum > SMALL_NUMBER ? NoiseSum / AmplitudeSum : 0.0f;
+				(*TargetBuffer)[Index] = FMath::Clamp((*TargetBuffer)[Index] + SignedNoise * StrengthNorm, -1.0f, 2.0f);
+				Chunk->HeightBuffer[Index] = FMath::Clamp(
+					Chunk->BaseBuffer[Index] + Chunk->SculptBuffer[Index] + Chunk->DetailBuffer[Index],
+					0.0f,
+					1.0f);
+			}
+		}
+
+		Chunk->RebuildPhysicsMesh();
+		Chunk->RequestGrassRegen();
+		Chunk->RequestTransferredFoliageRefresh();
+		MarkChunkDirty(Pair.Key);
+		ChangedCoords.AddUnique(Pair.Key);
+	}
+
+	if (ChangedCoords.Num() == 0)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("ApplyGlobalNoise: no valid chunks were modified."));
+		return;
+	}
+
+	BroadcastTerrainChanged(ChangedCoords);
+	BroadcastFoliageChanged(ChangedCoords);
+	if (HasAuthority())
+	{
+		for (const FIntPoint& Coord : ChangedCoords)
+		{
+			SyncPopulationForChunk(Coord);
+		}
+	}
+
+	UE_LOG(LogTerraDyne, Log,
+		TEXT("ApplyGlobalNoise: modified %d chunks on layer %d (Strength=%.2f, Frequency=%.6f, Seed=%.2f)."),
+		ChangedCoords.Num(), static_cast<int32>(ActiveLayer), Strength, Frequency, Seed);
+}
+
+bool ATerraDyneManager::ApplyAuthorizedBrush(
+	const FTerraDyneBrushParams& Params,
+	bool bReplicateToRelevantClients)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("ApplyAuthorizedBrush rejected on a non-authority manager."));
+		return false;
+	}
+
+	const FVector Location(Params.WorldLocation);
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const float MaxRadius = Settings ? Settings->MaxBrushRadius : 10000.0f;
+	const float MaxStrength = Settings ? Settings->MaxBrushStrength : 5000.0f;
+	const int32 MaxAffectedChunks = Settings ? Settings->MaxAffectedChunksPerBrush : 16;
+	const TArray<ATerraDyneChunk*> AffectedChunks = GetChunksInRadius(Location, Params.Radius);
+	if (Location.ContainsNaN() || !FMath::IsFinite(Params.Radius) || !FMath::IsFinite(Params.Strength) ||
+		!FMath::IsFinite(Params.FlattenHeight) || Params.Radius <= 0.0f || Params.Radius > MaxRadius ||
+		FMath::Abs(Params.Strength) > MaxStrength || Params.WeightLayerIndex < 0 ||
+		Params.WeightLayerIndex >= ATerraDyneChunk::NumWeightLayers || AffectedChunks.Num() == 0 ||
+		AffectedChunks.Num() > MaxAffectedChunks)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("ApplyAuthorizedBrush rejected invalid or over-budget parameters."));
+		return false;
+	}
+
+	ApplyGlobalBrush(
+		Location,
+		Params.Radius,
+		Params.Strength,
+		Params.BrushMode,
+		Params.TargetLayer,
+		Params.WeightLayerIndex,
+		Params.FlattenHeight);
+	if (bReplicateToRelevantClients)
+	{
+		Multicast_ApplyBrush(Params);
+	}
+	return true;
+}
+
+TArray<FIntPoint> ATerraDyneManager::GetActiveChunkCoordinates() const
+{
+	TArray<FIntPoint> Coordinates;
+	ActiveChunkMap.GetKeys(Coordinates);
+	Coordinates.Sort([](const FIntPoint& A, const FIntPoint& B)
+	{
+		return A.X == B.X ? A.Y < B.Y : A.X < B.X;
+	});
+	return Coordinates;
+}
+
+bool ATerraDyneManager::ExportChunkStatePacket(
+	FIntPoint Coordinate,
+	TArray<uint8>& OutPacket,
+	FString& OutError) const
+{
+	const ATerraDyneChunk* Chunk = GetChunkAtCoord(Coordinate);
+	if (!Chunk)
+	{
+		OutError = FString::Printf(TEXT("Chunk [%d,%d] is not active."), Coordinate.X, Coordinate.Y);
+		OutPacket.Reset();
+		return false;
+	}
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const int32 MaxUncompressed = Settings
+		? Settings->MaxUncompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxUncompressedBytes;
+	const int32 MaxPacket = Settings
+		? Settings->MaxCompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxPacketBytes;
+	if (!FTerraDyneStateCodec::EncodeChunk(Chunk->GetSerializedData(), OutPacket, &OutError, MaxUncompressed))
+	{
+		return false;
+	}
+	if (OutPacket.Num() > MaxPacket)
+	{
+		OutError = FString::Printf(TEXT("Encoded chunk packet size %d exceeds the %d-byte export limit."),
+			OutPacket.Num(), MaxPacket);
+		OutPacket.Reset();
+		return false;
+	}
+	return true;
+}
+
+bool ATerraDyneManager::ImportChunkStatePacket(
+	const TArray<uint8>& Packet,
+	FString& OutError,
+	bool bReplicateToRelevantClients)
+{
+	if (!HasAuthority())
+	{
+		OutError = TEXT("Chunk state can only be imported by the authoritative manager.");
+		return false;
+	}
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const int32 MaxPacket = Settings
+		? Settings->MaxCompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxPacketBytes;
+	const int32 MaxUncompressed = Settings
+		? Settings->MaxUncompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxUncompressedBytes;
+
+	FTerraDyneChunkData Data;
+	if (!FTerraDyneStateCodec::DecodeChunk(Packet, Data, &OutError, MaxPacket, MaxUncompressed))
+	{
+		return false;
+	}
+	if (!ShouldAllowChunkCoord(Data.Coordinate))
+	{
+		OutError = FString::Printf(TEXT("Chunk coordinate [%d,%d] is outside the configured world domain."),
+			Data.Coordinate.X, Data.Coordinate.Y);
+		return false;
+	}
+
+	ATerraDyneChunk* Chunk = GetChunkAtCoord(Data.Coordinate);
+	if (!Chunk)
+	{
+		Chunk = SpawnConfiguredChunk(Data.Coordinate, Data.Resolution);
+	}
+	if (!Chunk)
+	{
+		OutError = TEXT("Failed to create the destination chunk.");
+		return false;
+	}
+	Chunk->LoadFromData(Data);
+	MarkChunkDirty(Data.Coordinate);
+	TArray<FIntPoint> ChangedCoords;
+	ChangedCoords.Add(Data.Coordinate);
+	BroadcastTerrainChanged(ChangedCoords);
+	BroadcastFoliageChanged(ChangedCoords);
+	SyncPopulationForChunk(Data.Coordinate);
+	if (bReplicateToRelevantClients)
+	{
+		BroadcastChunkStateToRelevantClients(Data);
+	}
+	return true;
 }
 
 void ATerraDyneManager::SaveWorld(FString SlotName)
 {
 	if (SlotName.IsEmpty()) SlotName = TEXT("TerraDyneSave");
+	if (bWorldSaveInProgress)
+	{
+		QueuedWorldSaveSlot = SlotName;
+		UE_LOG(LogTerraDyne, Log, TEXT("TerraDyne: save already running; queued latest request for slot '%s'."), *SlotName);
+		return;
+	}
 
 	UTerraDyneSaveGame* SaveInst = Cast<UTerraDyneSaveGame>(UGameplayStatics::CreateSaveGameObject(UTerraDyneSaveGame::StaticClass()));
 	if (!SaveInst) return;
 
+	SaveInst->SaveFormatVersion = 2;
 	SaveInst->Timestamp = FDateTime::Now();
 	SaveInst->ManagerLocation = GetActorLocation();
 	SaveInst->SavedGlobalChunkSize = GlobalChunkSize;
@@ -709,14 +1206,45 @@ void ATerraDyneManager::SaveWorld(FString SlotName)
 		}
 	}
 
-	if (UGameplayStatics::SaveGameToSlot(SaveInst, SlotName, 0))
+	bWorldSaveInProgress = true;
+	const int32 ChunkCount = SaveInst->Chunks.Num();
+	TWeakObjectPtr<ATerraDyneManager> WeakThis(this);
+	FAsyncSaveGameToSlotDelegate SavedDelegate;
+	SavedDelegate.BindLambda([WeakThis, ChunkCount](const FString& SavedSlot, const int32 UserIndex, bool bSuccess)
 	{
-		UE_LOG(LogTemp, Log, TEXT("TerraDyne: World saved to slot '%s' with %d chunks."), *SlotName, SaveInst->Chunks.Num());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("TerraDyne: Failed to save to slot '%s'"), *SlotName);
-	}
+		if (!WeakThis.IsValid())
+		{
+			return;
+		}
+		WeakThis->bWorldSaveInProgress = false;
+		if (bSuccess)
+		{
+			UE_LOG(LogTerraDyne, Log, TEXT("TerraDyne: asynchronously saved slot '%s' with %d chunks."),
+				*SavedSlot, ChunkCount);
+		}
+		else
+		{
+			UE_LOG(LogTerraDyne, Error, TEXT("TerraDyne: asynchronous save failed for slot '%s'."), *SavedSlot);
+			if (UTerraDyneSubsystem* Sys = WeakThis->GetWorld()
+				? WeakThis->GetWorld()->GetSubsystem<UTerraDyneSubsystem>()
+				: nullptr)
+			{
+				Sys->ShowNotification(
+					FText::Format(NSLOCTEXT("TerraDyne", "SaveFail", "Failed to save terrain to slot '{0}'"),
+						FText::FromString(SavedSlot)),
+					ETerraDyneNotifySeverity::Error);
+			}
+		}
+		WeakThis->OnWorldSaveCompleted.Broadcast(SavedSlot, bSuccess);
+
+		if (!WeakThis->QueuedWorldSaveSlot.IsEmpty())
+		{
+			const FString QueuedSlot = MoveTemp(WeakThis->QueuedWorldSaveSlot);
+			WeakThis->QueuedWorldSaveSlot.Reset();
+			WeakThis->SaveWorld(QueuedSlot);
+		}
+	});
+	UGameplayStatics::AsyncSaveGameToSlot(SaveInst, SlotName, 0, MoveTemp(SavedDelegate));
 }
 
 void ATerraDyneManager::LoadWorld(FString SlotName)
@@ -725,12 +1253,25 @@ void ATerraDyneManager::LoadWorld(FString SlotName)
 
 	if (!UGameplayStatics::DoesSaveGameExist(SlotName, 0))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TerraDyne: No save game found at slot '%s'"), *SlotName);
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne: No save game found at slot '%s'"), *SlotName);
+		if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+		{
+			Sys->ShowNotification(
+				FText::Format(NSLOCTEXT("TerraDyne", "LoadNoSlot", "No save found at slot '{0}'"),
+					FText::FromString(SlotName)),
+				ETerraDyneNotifySeverity::Warning);
+		}
 		return;
 	}
 
 	UTerraDyneSaveGame* LoadInst = Cast<UTerraDyneSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
 	if (!LoadInst) return;
+	if (LoadInst->SaveFormatVersion > 2)
+	{
+		UE_LOG(LogTerraDyne, Error, TEXT("TerraDyne: save slot '%s' uses unsupported future format %d."),
+			*SlotName, LoadInst->SaveFormatVersion);
+		return;
+	}
 
 	// Clear streaming state — full world load resets everything
 	PendingLoadQueue.Empty();
@@ -748,7 +1289,7 @@ void ATerraDyneManager::LoadWorld(FString SlotName)
 	BuildPermissionZones.Reset();
 	RebuildWorldStateIndices();
 
-	UE_LOG(LogTemp, Log, TEXT("TerraDyne: Loading world from slot '%s'..."), *SlotName);
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyne: Loading world from slot '%s'..."), *SlotName);
 
 	SetActorLocation(LoadInst->ManagerLocation);
 	if (LoadInst->SavedGlobalChunkSize > KINDA_SMALL_NUMBER)
@@ -857,6 +1398,134 @@ void ATerraDyneManager::SetAuthoredChunkCoordinates(
 	OnRep_LandscapeMigrationState();
 }
 
+bool ATerraDyneManager::InitializeFromBakedLandscapeAssetSet(
+	UTerraDyneLandscapeAssetSet* AssetSet,
+	bool bClearExistingChunks)
+{
+	if (!AssetSet || !GetWorld())
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: Invalid baked Landscape asset set."));
+		if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportBakedNull", "Initialize failed: no baked Landscape asset set was provided."),
+				ETerraDyneNotifySeverity::Error);
+		}
+		return false;
+	}
+
+	if (AssetSet->Tiles.Num() == 0)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: Baked Landscape asset set %s contains no tiles."), *AssetSet->GetName());
+		if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportBakedEmpty", "Initialize failed: the baked Landscape asset set contains no chunk tiles."),
+				ETerraDyneNotifySeverity::Error);
+		}
+		return false;
+	}
+
+	PendingLoadQueue.Empty();
+	PendingUnloadQueue.Empty();
+	DirtyChunkSet.Empty();
+	ImportedChunkCoords.Empty();
+	LastStreamingHash = 0;
+	ClearUndoRedoState();
+
+	if (bClearExistingChunks)
+	{
+		TArray<AActor*> ExistingChunks;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ATerraDyneChunk::StaticClass(), ExistingChunks);
+		for (AActor* Actor : ExistingChunks)
+		{
+			if (Actor)
+			{
+				Actor->Destroy();
+			}
+		}
+
+		ActiveChunkMap.Reset();
+	}
+
+	LandscapeMigrationState = AssetSet->MigrationState;
+	if (LandscapeMigrationState.ImportedChunkSize > KINDA_SMALL_NUMBER)
+	{
+		GlobalChunkSize = LandscapeMigrationState.ImportedChunkSize;
+	}
+	else if (const UTerraDyneTileData* FirstTile = AssetSet->Tiles[0])
+	{
+		GlobalChunkSize = FirstTile->RealWorldSize;
+		LandscapeMigrationState.ImportedChunkSize = GlobalChunkSize;
+	}
+
+	if (LandscapeMigrationState.bWasImportedFromLandscape)
+	{
+		SetActorLocation(LandscapeMigrationState.RuntimeManagerLocation);
+	}
+
+	if (LandscapeMigrationState.bAdoptedLandscapeMaterial && AssetSet->AdoptedMasterMaterial)
+	{
+		MasterMaterial = AssetSet->AdoptedMasterMaterial;
+	}
+
+	int32 ImportedChunks = 0;
+	int32 ImportedResolution = LandscapeMigrationState.ImportedResolution;
+
+	for (UTerraDyneTileData* Tile : AssetSet->Tiles)
+	{
+		if (!Tile)
+		{
+			continue;
+		}
+
+		const FIntPoint Coord = Tile->GridCoordinate;
+		ImportedChunkCoords.Add(Coord);
+
+		ATerraDyneChunk* Chunk = SpawnConfiguredChunk(Coord, Tile->Resolution);
+		if (!Chunk)
+		{
+			continue;
+		}
+
+		Chunk->LoadFromData(Tile->BuildChunkData());
+		ImportedResolution = FMath::Max(ImportedResolution, Tile->Resolution);
+		ImportedChunks++;
+	}
+
+	if (ImportedChunks == 0)
+	{
+		if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportBakedNoChunks",
+					"Initialize failed: TerraDyne could not spawn chunks from the baked Landscape asset set."),
+				ETerraDyneNotifySeverity::Error);
+		}
+		return false;
+	}
+
+	LandscapeMigrationState.ImportedComponentCount = ImportedChunks;
+	LandscapeMigrationState.ImportedResolution = ImportedResolution;
+	LandscapeMigrationState.RuntimeManagerLocation = GetActorLocation();
+
+	RebuildChunkMap();
+	ApplyMaterialToActiveChunks();
+	ApplyGrassProfileToActiveChunks(LandscapeMigrationState.bRegenerateGrassFromImportedLayers);
+	RebuildWorldStateIndices();
+	OnRep_FrameworkConfig();
+	OnRep_LandscapeMigrationState();
+	RefreshPopulationForLoadedChunks();
+
+	UE_LOG(
+		LogTerraDyne,
+		Log,
+		TEXT("TerraDyne Import: Initialized %d authored chunks from baked asset set %s."),
+		ImportedChunks,
+		*AssetSet->GetName());
+	return true;
+}
+
 void ATerraDyneManager::RebuildChunkMap()
 {
 	ActiveChunkMap.Reset();
@@ -889,6 +1558,10 @@ void ATerraDyneManager::ApplyMaterialToActiveChunks()
 	{
 		if (Pair.Value)
 		{
+			if (HeightBrushMaterial)
+			{
+				Pair.Value->BrushMaterialBase = HeightBrushMaterial;
+			}
 			Pair.Value->SetMaterial(MasterMaterial);
 		}
 	}
@@ -940,8 +1613,7 @@ void ATerraDyneManager::ClearUndoRedoState()
 {
 	UndoStacks.Reset();
 	RedoStacks.Reset();
-	PendingStroke.Reset();
-	PendingStrokeOwner = nullptr;
+	PendingStrokes.Reset();
 }
 
 bool ATerraDyneManager::IsImportedChunkCoord(FIntPoint Coord) const
@@ -1361,7 +2033,7 @@ FGuid ATerraDyneManager::PlacePersistentActorFromDescriptor(
 
 	if (Descriptor.ActorClass.IsNull() && Descriptor.StaticMesh.IsNull())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TerraDyne: PlacePersistentActorFromDescriptor called without a class or mesh."));
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne: PlacePersistentActorFromDescriptor called without a class or mesh."));
 		return FGuid();
 	}
 
@@ -1483,14 +2155,6 @@ AActor* ATerraDyneManager::SpawnPopulationActor(const FTerraDynePersistentPopula
 			WorldTransform,
 			SpawnParams))
 		{
-			if (UStaticMeshComponent* StaticMeshComponent = StaticMeshActor->GetStaticMeshComponent())
-			{
-				StaticMeshComponent->SetStaticMesh(StaticMesh);
-				if (UMaterialInterface* MaterialOverride = Entry.Descriptor.MaterialOverride.LoadSynchronous())
-				{
-					StaticMeshComponent->SetMaterial(0, MaterialOverride);
-				}
-			}
 			SpawnedActor = StaticMeshActor;
 		}
 	}
@@ -1499,6 +2163,8 @@ AActor* ATerraDyneManager::SpawnPopulationActor(const FTerraDynePersistentPopula
 	{
 		return nullptr;
 	}
+
+	PreparePopulationActorForRuntimePlacement(SpawnedActor);
 
 	if (UStaticMesh* StaticMesh = Entry.Descriptor.StaticMesh.LoadSynchronous())
 	{
@@ -1754,6 +2420,7 @@ void ATerraDyneManager::SyncPopulationForChunk(FIntPoint Coord)
 					WorldTransform.SetLocation(WorldLocation);
 				}
 
+				PreparePopulationActorForRuntimePlacement(Actor);
 				Actor->SetActorTransform(WorldTransform);
 			}
 		}
@@ -2101,62 +2768,69 @@ void ATerraDyneManager::RefreshNavigationForBounds(const FBox& Bounds, bool bPop
 		return;
 	}
 
-	if (UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const FBox ExpandedBounds = Bounds.ExpandBy(FMath::Max(0.0f, NavigationDirtyBoundsPadding));
+	bool bMerged = false;
+	for (FBox& Existing : PendingNavigationDirtyAreas)
 	{
-		const FBox ExpandedBounds = Bounds.ExpandBy(FMath::Max(0.0f, NavigationDirtyBoundsPadding));
-		NavSystem->AddDirtyArea(ExpandedBounds, ENavigationDirtyFlag::All, FName(TEXT("TerraDyne")));
+		if (Existing.ExpandBy(NavigationDirtyBoundsPadding).Intersect(ExpandedBounds))
+		{
+			Existing += ExpandedBounds;
+			bMerged = true;
+			break;
+		}
+	}
+	if (!bMerged)
+	{
+		PendingNavigationDirtyAreas.Add(ExpandedBounds);
+	}
+
+	const int32 MaxAreas = Settings ? FMath::Max(1, Settings->MaxPendingNavigationDirtyAreas) : 32;
+	const float Debounce = Settings ? FMath::Max(0.0f, Settings->NavigationDirtyDebounceTime) : 0.5f;
+	if (PendingNavigationDirtyAreas.Num() >= MaxAreas || Debounce <= 0.0f)
+	{
+		FlushPendingNavigationDirtyAreas();
+	}
+	else if (NavigationDirtyTimer <= 0.0f)
+	{
+		NavigationDirtyTimer = Debounce;
 	}
 }
 
-void ATerraDyneManager::Multicast_SyncChunkState_Implementation(FIntPoint Coord, const TArray<float>& InSculptBuffer, const TArray<uint8>& InWeightData)
+void ATerraDyneManager::FlushPendingNavigationDirtyAreas()
 {
-	// Only apply on remote clients — server already has the correct state.
-	if (HasAuthority()) return;
+	if (!HasAuthority() || !GetWorld() || PendingNavigationDirtyAreas.Num() == 0)
+	{
+		return;
+	}
+	if (UNavigationSystemV1* NavSystem = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
+	{
+		for (const FBox& DirtyBounds : PendingNavigationDirtyAreas)
+		{
+			if (DirtyBounds.IsValid)
+			{
+				NavSystem->AddDirtyArea(DirtyBounds, ENavigationDirtyFlag::All, FName(TEXT("TerraDyne")));
+			}
+	}
+	}
+	PendingNavigationDirtyAreas.Reset();
+	NavigationDirtyTimer = 0.0f;
+}
 
-	ATerraDyneChunk* Chunk = GetChunkAtCoord(Coord);
+void ATerraDyneManager::Multicast_SyncChunkState(const FTerraDyneChunkData& Data)
+{
+	if (HasAuthority())
+	{
+		BroadcastChunkStateToRelevantClients(Data);
+		return;
+	}
+
+	ATerraDyneChunk* Chunk = GetChunkAtCoord(Data.Coordinate);
 	if (!Chunk) return;
 
-	Chunk->SculptBuffer = InSculptBuffer;
-
-	// Unpack RGBA8 weight data
-	const int32 NumPx = Chunk->Resolution * Chunk->Resolution;
-	if (InWeightData.Num() == NumPx * 4)
-	{
-		for (int32 L = 0; L < ATerraDyneChunk::NumWeightLayers; L++)
-		{
-			Chunk->WeightBuffers[L].SetNum(NumPx);
-		}
-		for (int32 i = 0; i < NumPx; i++)
-		{
-			Chunk->WeightBuffers[0][i] = InWeightData[i * 4 + 0] / 255.f;
-			Chunk->WeightBuffers[1][i] = InWeightData[i * 4 + 1] / 255.f;
-			Chunk->WeightBuffers[2][i] = InWeightData[i * 4 + 2] / 255.f;
-			Chunk->WeightBuffers[3][i] = InWeightData[i * 4 + 3] / 255.f;
-		}
-	}
-
-	// Recompute combined HeightBuffer
-	const int32 ExpectedSize = Chunk->HeightBuffer.Num();
-	if (Chunk->BaseBuffer.Num() == ExpectedSize &&
-		Chunk->SculptBuffer.Num() == ExpectedSize &&
-		Chunk->DetailBuffer.Num() == ExpectedSize)
-	{
-		for (int32 i = 0; i < ExpectedSize; i++)
-		{
-			Chunk->HeightBuffer[i] = FMath::Clamp(
-				Chunk->BaseBuffer[i] + Chunk->SculptBuffer[i] + Chunk->DetailBuffer[i], 0.f, 1.f);
-		}
-	}
-
-	Chunk->RebuildPhysicsMesh();
-	Chunk->UploadWeightTexture();
-	if (Chunk->GrassProfile)
-	{
-		Chunk->RequestGrassRegen();
-	}
-	Chunk->RequestTransferredFoliageRefresh();
+	Chunk->LoadFromData(Data);
 	TArray<FIntPoint> ChangedCoords;
-	ChangedCoords.Add(Coord);
+	ChangedCoords.Add(Data.Coordinate);
 	BroadcastTerrainChanged(ChangedCoords);
 	BroadcastFoliageChanged(ChangedCoords);
 }
@@ -2165,11 +2839,7 @@ void ATerraDyneManager::CleanupPlayerStacks(APlayerController* Controller)
 {
 	UndoStacks.Remove(Controller);
 	RedoStacks.Remove(Controller);
-	if (PendingStrokeOwner == Controller)
-	{
-		PendingStroke.Reset();
-		PendingStrokeOwner = nullptr;
-	}
+	PendingStrokes.Remove(Controller);
 }
 
 void ATerraDyneManager::SendFullSyncToController(ATerraDyneEditController* Controller)
@@ -2179,26 +2849,148 @@ void ATerraDyneManager::SendFullSyncToController(ATerraDyneEditController* Contr
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("TerraDyneManager: Sending full sync to %s (%d chunks)"),
-		*Controller->GetName(), ActiveChunkMap.Num());
+	UTerraDyneReplicationComponent* ReplicationComponent = Controller->TerraDyneReplication;
+	if (!ReplicationComponent)
+	{
+		ReplicationComponent = Controller->FindComponentByClass<UTerraDyneReplicationComponent>();
+	}
+	SendFullSyncToReplicationComponent(ReplicationComponent);
+}
 
+bool ATerraDyneManager::SendChunkStateToReplicationComponent(
+	UTerraDyneReplicationComponent* ReplicationComponent,
+	const FTerraDyneChunkData& Data)
+{
+	return HasAuthority() && ReplicationComponent && ReplicationComponent->SendChunkState(Data);
+}
+
+bool ATerraDyneManager::IsControllerRelevantToLocation(
+	const APlayerController* Controller,
+	FVector Location) const
+{
+	if (!Controller)
+	{
+		return false;
+	}
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const float Radius = Settings ? Settings->TerrainReplicationRadius : 150000.0f;
+	if (Radius <= 0.0f)
+	{
+		return true;
+	}
+
+	const AActor* ReferenceActor = Controller->GetPawn();
+	if (!ReferenceActor)
+	{
+		ReferenceActor = Controller->GetViewTarget();
+	}
+	return ReferenceActor &&
+		FVector::DistSquared(ReferenceActor->GetActorLocation(), Location) <= FMath::Square(Radius);
+}
+
+void ATerraDyneManager::SendFullSyncToReplicationComponent(
+	UTerraDyneReplicationComponent* ReplicationComponent)
+{
+	if (!HasAuthority() || !ReplicationComponent)
+	{
+		return;
+	}
+
+	APlayerController* Controller = ReplicationComponent->GetOwningPlayerController();
+	if (!Controller)
+	{
+		return;
+	}
+
+	const AActor* ReferenceActor = Controller->GetPawn();
+	if (!ReferenceActor)
+	{
+		ReferenceActor = Controller->GetViewTarget();
+	}
+	const FVector ReferenceLocation = ReferenceActor ? ReferenceActor->GetActorLocation() : GetActorLocation();
+
+	TArray<ATerraDyneChunk*> RelevantChunks;
 	for (const auto& Pair : ActiveChunkMap)
 	{
 		ATerraDyneChunk* Chunk = Pair.Value;
-		if (!Chunk) continue;
+		if (Chunk && IsControllerRelevantToLocation(Controller, Chunk->GetActorLocation()))
+		{
+			RelevantChunks.Add(Chunk);
+		}
+	}
+	RelevantChunks.Sort([ReferenceLocation](const ATerraDyneChunk& A, const ATerraDyneChunk& B)
+	{
+		return FVector::DistSquared(ReferenceLocation, A.GetActorLocation()) <
+			FVector::DistSquared(ReferenceLocation, B.GetActorLocation());
+	});
 
-		FTerraDyneChunkData Data = Chunk->GetSerializedData();
-		Controller->Client_ReceiveChunkSync(Data);
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const int32 MaxChunks = Settings ? FMath::Max(1, Settings->MaxFullSyncChunksPerConnection) : 128;
+	const int32 ChunksToSend = FMath::Min(MaxChunks, RelevantChunks.Num());
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyneManager: queueing %d/%d relevant chunks for %s."),
+		ChunksToSend, RelevantChunks.Num(), *GetNameSafe(Controller));
+
+	for (int32 Index = 0; Index < ChunksToSend; ++Index)
+	{
+		ReplicationComponent->SendChunkState(RelevantChunks[Index]->GetSerializedData());
 	}
 }
 
-void ATerraDyneManager::Multicast_ApplyBrush_Implementation(const FTerraDyneBrushParams& Params)
+void ATerraDyneManager::BroadcastChunkStateToRelevantClients(const FTerraDyneChunkData& Data)
 {
-	// On the server the brush was already applied before the multicast was sent,
-	// so only apply on remote clients.
+	ATerraDyneChunk* Chunk = GetChunkAtCoord(Data.Coordinate);
+	const FVector Location = Chunk ? Chunk->GetActorLocation() : GetActorLocation();
+	if (!GetWorld())
+	{
+		return;
+	}
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* Controller = It->Get();
+		if (!Controller || Controller->IsLocalController() || !IsControllerRelevantToLocation(Controller, Location))
+		{
+			continue;
+		}
+		if (UTerraDyneReplicationComponent* Component =
+			Controller->FindComponentByClass<UTerraDyneReplicationComponent>())
+		{
+			Component->SendChunkState(Data);
+		}
+	}
+}
+
+void ATerraDyneManager::Multicast_ApplyBrush(const FTerraDyneBrushParams& Params)
+{
 	if (!HasAuthority())
 	{
-		ApplyGlobalBrush(Params.WorldLocation, Params.Radius, Params.Strength, Params.BrushMode, Params.WeightLayerIndex, Params.FlattenHeight);
+		ApplyGlobalBrush(
+			Params.WorldLocation,
+			Params.Radius,
+			Params.Strength,
+			Params.BrushMode,
+			Params.TargetLayer,
+			Params.WeightLayerIndex,
+			Params.FlattenHeight);
+		return;
+	}
+
+	if (!GetWorld())
+	{
+		return;
+	}
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* Controller = It->Get();
+		if (!Controller || Controller->IsLocalController() ||
+			!IsControllerRelevantToLocation(Controller, Params.WorldLocation))
+		{
+			continue;
+		}
+		if (UTerraDyneReplicationComponent* Component =
+			Controller->FindComponentByClass<UTerraDyneReplicationComponent>())
+		{
+			Component->Client_ApplyBrush(Params);
+		}
 	}
 }
 
@@ -2241,159 +3033,127 @@ FString ATerraDyneManager::GetChunkCachePath(FIntPoint Coord) const
 
 void ATerraDyneManager::SaveChunkToCache(FIntPoint Coord, const FTerraDyneChunkData& Data)
 {
-	TArray<uint8> RawBytes;
-	FMemoryWriter Ar(RawBytes, true);
-	FTerraDyneChunkData MutableData = Data;
-	Ar << MutableData.Coordinate;
-	Ar << MutableData.Resolution;
-	Ar << MutableData.ZScale;
-	Ar << MutableData.HeightData;
-	Ar << MutableData.BaseData;
-	Ar << MutableData.SculptData;
-	Ar << MutableData.DetailData;
-	Ar << MutableData.WeightData;
-	Ar << MutableData.bTransferredFoliageFollowsTerrain;
-	Ar << MutableData.FoliageStaticMeshPaths;
-	Ar << MutableData.FoliageMaterialCounts;
-	Ar << MutableData.FoliageOverrideMaterialPaths;
-	Ar << MutableData.FoliageDefinitionIndices;
-	Ar << MutableData.FoliageInstanceLocalTransforms;
-	Ar << MutableData.FoliageInstanceTerrainOffsets;
-	Ar << MutableData.ActorFoliageClassPaths;
-	Ar << MutableData.ActorFoliageAttachFlags;
-	Ar << MutableData.ActorFoliageDefinitionIndices;
-	Ar << MutableData.ActorFoliageInstanceLocalTransforms;
-	Ar << MutableData.ActorFoliageInstanceTerrainOffsets;
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const int32 MaxUncompressed = Settings
+		? Settings->MaxUncompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxUncompressedBytes;
+	const int32 MaxPacket = Settings
+		? Settings->MaxCompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxPacketBytes;
+	const bool bAsyncWrite = !Settings || Settings->bUseAsyncChunkCacheWrites;
+	const FString Path = GetChunkCachePath(Coord);
 
-	// Compress with Zlib
-	int32 UncompressedSize = RawBytes.Num();
-	TArray<uint8> Compressed;
-	Compressed.SetNumUninitialized(FCompression::CompressMemoryBound(NAME_Zlib, UncompressedSize));
-	int32 CompressedSize = Compressed.Num();
-	if (FCompression::CompressMemory(NAME_Zlib, Compressed.GetData(), CompressedSize, RawBytes.GetData(), UncompressedSize))
+	PendingChunkCacheWrites.Add(Coord, Data);
+	const uint64 Generation = NextChunkCacheWriteGeneration++;
+	ChunkCacheWriteGenerations.Add(Coord, Generation);
+	TWeakObjectPtr<ATerraDyneManager> WeakThis(this);
+	auto Completion = [WeakThis, Coord, Generation](bool bSuccess, const FString& Error)
 	{
-		Compressed.SetNum(CompressedSize);
-
-		// File format: [UncompressedSize:int32][CompressedData]
-		TArray<uint8> FileData;
-		FileData.SetNumUninitialized(sizeof(int32) + CompressedSize);
-		FMemory::Memcpy(FileData.GetData(), &UncompressedSize, sizeof(int32));
-		FMemory::Memcpy(FileData.GetData() + sizeof(int32), Compressed.GetData(), CompressedSize);
-
-		FString Path = GetChunkCachePath(Coord);
-		FString FileDir = FPaths::GetPath(Path);
-		IFileManager::Get().MakeDirectory(*FileDir, true);
-		if (!FFileHelper::SaveArrayToFile(FileData, *Path))
+		if (!WeakThis.IsValid() || WeakThis->ChunkCacheWriteGenerations.FindRef(Coord) != Generation)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Streaming: Failed to write cache file for chunk [%d,%d] at %s"), Coord.X, Coord.Y, *Path);
+			return;
 		}
-		else
+
+		if (bSuccess)
 		{
-			UE_LOG(LogTemp, Verbose, TEXT("Streaming: Cached chunk [%d,%d] (%d bytes compressed)"), Coord.X, Coord.Y, CompressedSize);
+			WeakThis->PendingChunkCacheWrites.Remove(Coord);
+			WeakThis->ChunkCacheRetryAfterSeconds.Remove(Coord);
+			UE_LOG(LogTerraDyne, Verbose, TEXT("Streaming: atomically cached chunk [%d,%d]."), Coord.X, Coord.Y);
+			return;
 		}
-	}
-	else
+
+		const double Now = WeakThis->GetWorld() ? WeakThis->GetWorld()->GetTimeSeconds() : 0.0;
+		WeakThis->ChunkCacheRetryAfterSeconds.Add(Coord, Now + 5.0);
+		UE_LOG(LogTerraDyne, Warning, TEXT("Streaming: cache write failed for chunk [%d,%d]: %s"),
+			Coord.X, Coord.Y, *Error);
+		if (UTerraDyneSubsystem* Sys = WeakThis->GetWorld()
+			? WeakThis->GetWorld()->GetSubsystem<UTerraDyneSubsystem>()
+			: nullptr)
+		{
+			Sys->ShowNotification(
+				FText::Format(NSLOCTEXT("TerraDyne", "CacheFail", "Failed to cache chunk [{0},{1}]; retry scheduled"),
+					FText::AsNumber(Coord.X), FText::AsNumber(Coord.Y)),
+				ETerraDyneNotifySeverity::Warning);
+		}
+	};
+
+	if (bAsyncWrite)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Streaming: Failed to compress chunk [%d,%d]"), Coord.X, Coord.Y);
+		FOnTerraDyneAsyncSaveComplete Delegate;
+		Delegate.BindLambda(Completion);
+		FTerraDyneAsyncSaver::SaveChunkStateAtomically(
+			Path, Data, MaxUncompressed, MaxPacket, MoveTemp(Delegate));
+		return;
 	}
+
+	TArray<uint8> Packet;
+	FString Error;
+	bool bSuccess = FTerraDyneStateCodec::EncodeChunk(Data, Packet, &Error, MaxUncompressed);
+	if (bSuccess && Packet.Num() > MaxPacket)
+	{
+		Error = FString::Printf(TEXT("Encoded chunk packet size %d exceeds the %d-byte cache limit."),
+			Packet.Num(), MaxPacket);
+		bSuccess = false;
+	}
+	if (bSuccess)
+	{
+		bSuccess = FTerraDyneAsyncSaver::SaveBytesAtomicallySync(Path, Packet, Error);
+	}
+	Completion(bSuccess, Error);
 }
 
 bool ATerraDyneManager::LoadChunkFromCache(FIntPoint Coord, FTerraDyneChunkData& OutData)
 {
+	if (const FTerraDyneChunkData* PendingData = PendingChunkCacheWrites.Find(Coord))
+	{
+		OutData = *PendingData;
+		return true;
+	}
+
 	FString Path = GetChunkCachePath(Coord);
 	if (!IFileManager::Get().FileExists(*Path))
 	{
 		return false;
 	}
+	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
+	const int32 MaxPacket = Settings
+		? Settings->MaxCompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxPacketBytes;
+	const int32 MaxUncompressed = Settings
+		? Settings->MaxUncompressedChunkStateBytes
+		: FTerraDyneStateCodec::DefaultMaxUncompressedBytes;
+	const int64 FileSize = IFileManager::Get().FileSize(*Path);
+	if (FileSize <= 0 || FileSize > MaxPacket)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("Streaming: rejected chunk cache [%d,%d] with size %lld."),
+			Coord.X, Coord.Y, FileSize);
+		return false;
+	}
+
 	TArray<uint8> FileData;
 	if (!FFileHelper::LoadFileToArray(FileData, *Path))
 	{
 		return false;
 	}
-	if (FileData.Num() <= (int32)sizeof(int32))
+
+	FString Error;
+	const bool bVersioned = FTerraDyneStateCodec::IsVersionedPacket(FileData);
+	const bool bDecoded = bVersioned
+		? FTerraDyneStateCodec::DecodeChunk(FileData, OutData, &Error, MaxPacket, MaxUncompressed)
+		: FTerraDyneStateCodec::DecodeLegacyCache(FileData, OutData, &Error, MaxUncompressed);
+	if (!bDecoded || OutData.Coordinate != Coord)
 	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("Streaming: rejected cache for chunk [%d,%d]: %s"),
+			Coord.X, Coord.Y, bDecoded ? TEXT("coordinate mismatch") : *Error);
 		return false;
 	}
 
-	int32 UncompressedSize = 0;
-	FMemory::Memcpy(&UncompressedSize, FileData.GetData(), sizeof(int32));
-
-	// Sanity check: reject obviously invalid sizes
-	constexpr int32 MaxReasonableSize = 64 * 1024 * 1024; // 64 MB
-	if (UncompressedSize <= 0 || UncompressedSize > MaxReasonableSize)
+	if (!bVersioned)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Streaming: Invalid uncompressed size %d for chunk [%d,%d]"),
-			UncompressedSize, Coord.X, Coord.Y);
-		return false;
+		UE_LOG(LogTerraDyne, Log, TEXT("Streaming: migrating legacy cache for chunk [%d,%d] to the versioned format."),
+			Coord.X, Coord.Y);
+		SaveChunkToCache(Coord, OutData);
 	}
-
-	TArray<uint8> Decompressed;
-	Decompressed.SetNumUninitialized(UncompressedSize);
-	if (!FCompression::UncompressMemory(NAME_Zlib, Decompressed.GetData(), UncompressedSize,
-		FileData.GetData() + sizeof(int32), FileData.Num() - sizeof(int32)))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Streaming: Failed to decompress chunk [%d,%d]"), Coord.X, Coord.Y);
-		return false;
-	}
-
-	FMemoryReader Ar(Decompressed, true);
-	Ar << OutData.Coordinate;
-	Ar << OutData.Resolution;
-	Ar << OutData.ZScale;
-	Ar << OutData.HeightData;
-	Ar << OutData.BaseData;
-	Ar << OutData.SculptData;
-	Ar << OutData.DetailData;
-	Ar << OutData.WeightData;
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.bTransferredFoliageFollowsTerrain;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageStaticMeshPaths;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageMaterialCounts;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageOverrideMaterialPaths;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageDefinitionIndices;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageInstanceLocalTransforms;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.FoliageInstanceTerrainOffsets;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.ActorFoliageClassPaths;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.ActorFoliageAttachFlags;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.ActorFoliageDefinitionIndices;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.ActorFoliageInstanceLocalTransforms;
-	}
-	if (!Ar.AtEnd())
-	{
-		Ar << OutData.ActorFoliageInstanceTerrainOffsets;
-	}
-
 	return true;
 }
 
@@ -2443,7 +3203,7 @@ ATerraDyneChunk* ATerraDyneManager::SpawnConfiguredChunk(FIntPoint Coord, int32 
 	else
 	{
 		Chunk->Resolution = 64;
-		UE_LOG(LogTemp, Warning, TEXT("TerraDyneSettings CDO not found; using default Resolution=64"));
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyneSettings CDO not found; using default Resolution=64"));
 	}
 
 	Chunk->FinishSpawning(FTransform(Location));
@@ -2472,11 +3232,11 @@ void ATerraDyneManager::LoadOrSpawnChunk(FIntPoint Coord)
 	if (LoadChunkFromCache(Coord, CachedData))
 	{
 		Chunk->LoadFromData(CachedData);
-		UE_LOG(LogTemp, Verbose, TEXT("Streaming: Loaded chunk [%d,%d] from cache"), Coord.X, Coord.Y);
+		UE_LOG(LogTerraDyne, Verbose, TEXT("Streaming: Loaded chunk [%d,%d] from cache"), Coord.X, Coord.Y);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Verbose, TEXT("Streaming: Spawned fresh chunk [%d,%d]"), Coord.X, Coord.Y);
+		UE_LOG(LogTerraDyne, Verbose, TEXT("Streaming: Spawned fresh chunk [%d,%d]"), Coord.X, Coord.Y);
 	}
 
 	EnsureChunkFrameworkState(Coord, Chunk);
@@ -2498,14 +3258,14 @@ void ATerraDyneManager::UnloadChunk(FIntPoint Coord)
 		FTerraDyneChunkData Data = Chunk->GetSerializedData();
 		SaveChunkToCache(Coord, Data);
 		DirtyChunkSet.Remove(Coord);
-		UE_LOG(LogTemp, Verbose, TEXT("Streaming: Saved dirty chunk [%d,%d] to cache"), Coord.X, Coord.Y);
+		UE_LOG(LogTerraDyne, Verbose, TEXT("Streaming: Saved dirty chunk [%d,%d] to cache"), Coord.X, Coord.Y);
 	}
 
 	ActiveChunkMap.Remove(Coord);
 	Chunk->Destroy();
 	PendingUnloadQueue.Remove(Coord);
 
-	UE_LOG(LogTemp, Verbose, TEXT("Streaming: Unloaded chunk [%d,%d]"), Coord.X, Coord.Y);
+	UE_LOG(LogTerraDyne, Verbose, TEXT("Streaming: Unloaded chunk [%d,%d]"), Coord.X, Coord.Y);
 }
 
 // ---- Streaming: Ring Update ----
@@ -2648,11 +3408,6 @@ void ATerraDyneManager::ProcessStreamingQueues(const TArray<FVector>& PlayerPosi
 }
 
 #if WITH_EDITOR
-void ATerraDyneManager::ManualImport()
-{
-	ImportFromLandscape(TargetLandscapeSource, true);
-}
-
 void ATerraDyneManager::MigrateLandscapeProject()
 {
 	ImportFromLandscapeWithOptions(TargetLandscapeSource, LandscapeMigrationOptions);
@@ -2669,7 +3424,7 @@ void ATerraDyneManager::ResampleLandscapeData(ATerraDyneChunk* Chunk, ULandscape
 	ULandscapeInfo* Info = Proxy ? Proxy->GetLandscapeInfo() : nullptr;
 	if (!Info)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TerraDyne Import: LandscapeInfo unavailable for component %s."), *SourceComponent->GetName());
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: LandscapeInfo unavailable for component %s."), *SourceComponent->GetName());
 		return;
 	}
 
@@ -2716,9 +3471,15 @@ void ATerraDyneManager::ResampleLandscapeData(ATerraDyneChunk* Chunk, ULandscape
 		{
 			if (Allocation.LayerInfo)
 			{
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7
 				const FName LayerName = Allocation.LayerInfo->GetLayerName() != NAME_None
 					? Allocation.LayerInfo->GetLayerName()
 					: Allocation.LayerInfo->GetFName();
+#else
+				const FName LayerName = Allocation.LayerInfo->LayerName != NAME_None
+					? Allocation.LayerInfo->LayerName
+					: Allocation.LayerInfo->GetFName();
+#endif
 				LayerInfoMap.Add(LayerName, Allocation.LayerInfo);
 			}
 		}
@@ -2749,27 +3510,115 @@ void ATerraDyneManager::ResampleLandscapeData(ATerraDyneChunk* Chunk, ULandscape
 	Chunk->RebuildPhysicsMesh();
 }
 
-void ATerraDyneManager::ImportFromLandscape(ALandscapeProxy* TargetLandscape, bool bHideSource)
-{
-	FTerraDyneLandscapeMigrationOptions Options = LandscapeMigrationOptions;
-	Options.bHideSourceLandscape = bHideSource;
-	ImportFromLandscapeWithOptions(TargetLandscape, Options);
-}
-
 void ATerraDyneManager::ImportFromLandscapeWithOptions(ALandscapeProxy* TargetLandscape, const FTerraDyneLandscapeMigrationOptions& Options)
 {
-	ImportInternal(TargetLandscape, Options);
-}
-
-void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyneLandscapeMigrationOptions& Options)
-{
-	if (!Source || !GetWorld())
+	if (!TargetLandscape || !GetWorld())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TerraDyne Import: Invalid landscape source."));
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: Invalid landscape source."));
+		if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportNull", "Import failed: no landscape source selected."),
+				ETerraDyneNotifySeverity::Error);
+		}
 		return;
 	}
 
-	TargetLandscapeSource = Source;
+	ALandscapeProxy* MetadataLandscape = TargetLandscape;
+	if (ALandscape* RootLandscape = TargetLandscape->GetLandscapeActor())
+	{
+		MetadataLandscape = RootLandscape;
+	}
+
+	TArray<ULandscapeComponent*> SourceComponents;
+	if (ULandscapeInfo* LandscapeInfo = TargetLandscape->GetLandscapeInfo())
+	{
+		LandscapeInfo->ForAllLandscapeComponents([&SourceComponents](ULandscapeComponent* Component)
+		{
+			if (Component)
+			{
+				SourceComponents.Add(Component);
+			}
+		});
+	}
+
+	if (SourceComponents.Num() == 0)
+	{
+		for (ULandscapeComponent* Component : TargetLandscape->LandscapeComponents)
+		{
+			if (Component)
+			{
+				SourceComponents.Add(Component);
+			}
+		}
+	}
+
+	SourceComponents.Sort([](const ULandscapeComponent& A, const ULandscapeComponent& B)
+	{
+		if (A.SectionBaseX == B.SectionBaseX)
+		{
+			return A.SectionBaseY < B.SectionBaseY;
+		}
+
+		return A.SectionBaseX < B.SectionBaseX;
+	});
+
+	if (SourceComponents.Num() == 0)
+	{
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: Landscape %s has no loaded components to import."),
+			*TargetLandscape->GetName());
+		if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportNoComponents",
+					"Import failed: the selected Landscape has no loaded components. Load the Landscape cells/proxies and try again."),
+				ETerraDyneNotifySeverity::Error);
+		}
+		return;
+	}
+
+	if (Options.bRejectLandscapeVisibilityHoles)
+	{
+		for (ULandscapeComponent* Component : SourceComponents)
+		{
+			ULandscapeLayerInfoObject* VisibilityLayer = Component ? Component->GetVisibilityLayer() : nullptr;
+			ALandscapeProxy* Proxy = Component ? Component->GetLandscapeProxy() : nullptr;
+			ULandscapeInfo* Info = Proxy ? Proxy->GetLandscapeInfo() : nullptr;
+			if (!VisibilityLayer || !Info || Component->ComponentSizeQuads <= 0)
+			{
+				continue;
+			}
+
+			const int32 Size = Component->ComponentSizeQuads + 1;
+			TArray<uint8> VisibilityData;
+			VisibilityData.SetNumZeroed(Size * Size);
+			FLandscapeEditDataInterface EditData(Info);
+			EditData.GetWeightDataFast(
+				VisibilityLayer,
+				Component->SectionBaseX,
+				Component->SectionBaseY,
+				Component->SectionBaseX + Component->ComponentSizeQuads,
+				Component->SectionBaseY + Component->ComponentSizeQuads,
+				VisibilityData.GetData(),
+				Size);
+			if (VisibilityData.ContainsByPredicate([](uint8 Value) { return Value > 0; }))
+			{
+				UE_LOG(LogTerraDyne, Error,
+					TEXT("TerraDyne Import: refusing to convert %s because component %s contains Landscape visibility holes."),
+					*TargetLandscape->GetName(), *GetNameSafe(Component));
+				if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+				{
+					Sys->ShowNotification(
+						NSLOCTEXT("TerraDyne", "ImportVisibilityRejected",
+							"Import stopped: Landscape visibility holes are not supported by the current TerraDyne mesh format."),
+						ETerraDyneNotifySeverity::Error);
+				}
+				return;
+			}
+		}
+	}
+
+	TargetLandscapeSource = TargetLandscape;
 
 	const bool bPreviousStreamingPaused = bStreamingPaused;
 	if (Options.bPauseStreamingDuringImport)
@@ -2800,23 +3649,23 @@ void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyne
 
 	LandscapeMigrationState = FTerraDyneLandscapeMigrationState();
 	LandscapeMigrationState.bWasImportedFromLandscape = true;
-	LandscapeMigrationState.SourceLandscapeName = Source->GetName();
-	LandscapeMigrationState.SourceLandscapePath = Source->GetPathName();
-	LandscapeMigrationState.SourceLandscapeLocation = Source->GetActorLocation();
-	LandscapeMigrationState.SourceLandscapeScale = Source->GetActorScale3D();
-	LandscapeMigrationState.SourceLandscapeMaterialPath = Source->LandscapeMaterial ? Source->LandscapeMaterial->GetPathName() : FString();
+	LandscapeMigrationState.SourceLandscapeName = MetadataLandscape->GetName();
+	LandscapeMigrationState.SourceLandscapePath = MetadataLandscape->GetPathName();
+	LandscapeMigrationState.SourceLandscapeLocation = MetadataLandscape->GetActorLocation();
+	LandscapeMigrationState.SourceLandscapeScale = MetadataLandscape->GetActorScale3D();
+	LandscapeMigrationState.SourceLandscapeMaterialPath = MetadataLandscape->LandscapeMaterial ? MetadataLandscape->LandscapeMaterial->GetPathName() : FString();
 	LandscapeMigrationState.bImportedPaintLayers = Options.bImportWeightLayers;
 	LandscapeMigrationState.bRegenerateGrassFromImportedLayers = Options.bRegenerateGrassFromImportedLayers;
 	LandscapeMigrationState.bSourceLandscapeHidden = Options.bHideSourceLandscape;
 	LandscapeMigrationState.ImportedAtIso8601 = FDateTime::UtcNow().ToIso8601();
 
-	const FVector LandscapeScale = Source->GetActorScale3D();
+	const FVector LandscapeScale = MetadataLandscape->GetActorScale3D();
 	if (LandscapeScale.X > KINDA_SMALL_NUMBER)
 	{
-		GlobalChunkSize = Source->ComponentSizeQuads * LandscapeScale.X;
+		GlobalChunkSize = SourceComponents[0]->ComponentSizeQuads * LandscapeScale.X;
 	}
 
-	const FVector SourceLocation = Source->GetActorLocation();
+	const FVector SourceLocation = MetadataLandscape->GetActorLocation();
 	SetActorLocation(FVector(
 		SourceLocation.X + (GlobalChunkSize * 0.5f),
 		SourceLocation.Y + (GlobalChunkSize * 0.5f),
@@ -2824,17 +3673,34 @@ void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyne
 	LandscapeMigrationState.RuntimeManagerLocation = GetActorLocation();
 	LandscapeMigrationState.ImportedChunkSize = GlobalChunkSize;
 
-	if (Options.bAdoptLandscapeMaterialAsMasterMaterial && Source->LandscapeMaterial)
+	if (Options.bAdoptLandscapeMaterialAsMasterMaterial && MetadataLandscape->LandscapeMaterial)
 	{
-		MasterMaterial = Source->LandscapeMaterial;
-		LandscapeMigrationState.bAdoptedLandscapeMaterial = true;
+		if (TerraDyneWorldFramework::UsesLandscapeOnlyMaterialExpressions(MetadataLandscape->LandscapeMaterial))
+		{
+			UE_LOG(LogTerraDyne, Warning,
+				TEXT("TerraDyne Import: Skipping adoption of landscape material %s because it uses Landscape-only material expressions."),
+				*MetadataLandscape->LandscapeMaterial->GetName());
+
+			if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+			{
+				Sys->ShowNotification(
+					NSLOCTEXT("TerraDyne", "ImportLandscapeMaterialRejected",
+						"The source Landscape material uses Landscape-only nodes, so TerraDyne kept the current chunk master material."),
+					ETerraDyneNotifySeverity::Warning);
+			}
+		}
+		else
+		{
+			MasterMaterial = MetadataLandscape->LandscapeMaterial;
+			LandscapeMigrationState.bAdoptedLandscapeMaterial = true;
+		}
 	}
 
 	if (Options.bImportWeightLayers || Options.bCaptureLayerMappings)
 	{
 		TSet<FName> SeenMappedLayers;
 		TSet<FName> SeenUnmappedLayers;
-		for (ULandscapeComponent* Component : Source->LandscapeComponents)
+		for (ULandscapeComponent* Component : SourceComponents)
 		{
 			if (!Component)
 			{
@@ -2843,14 +3709,20 @@ void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyne
 
 			for (const FWeightmapLayerAllocationInfo& Allocation : Component->GetWeightmapLayerAllocations())
 			{
-				if (!Allocation.LayerInfo)
+				if (!Allocation.LayerInfo || Allocation.LayerInfo == Component->GetVisibilityLayer())
 				{
 					continue;
 				}
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7
 				const FName LayerName = Allocation.LayerInfo->GetLayerName() != NAME_None
 					? Allocation.LayerInfo->GetLayerName()
 					: Allocation.LayerInfo->GetFName();
+#else
+				const FName LayerName = Allocation.LayerInfo->LayerName != NAME_None
+					? Allocation.LayerInfo->LayerName
+					: Allocation.LayerInfo->GetFName();
+#endif
 
 				if (SeenMappedLayers.Contains(LayerName) || SeenUnmappedLayers.Contains(LayerName))
 				{
@@ -3051,7 +3923,7 @@ void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyne
 
 	int32 ImportedChunks = 0;
 	int32 ImportedResolution = 0;
-	for (ULandscapeComponent* Component : Source->LandscapeComponents)
+	for (ULandscapeComponent* Component : SourceComponents)
 	{
 		if (!Component)
 		{
@@ -3085,18 +3957,33 @@ void ATerraDyneManager::ImportInternal(ALandscapeProxy* Source, const FTerraDyne
 	LandscapeMigrationState.ImportedFoliageDefinitionCount = ImportedFoliageDefinitions.Num();
 	LandscapeMigrationState.ImportedFoliageInstanceCount = ImportedFoliageInstances;
 
+	if (ImportedChunks == 0)
+	{
+		bStreamingPaused = bPreviousStreamingPaused;
+		UE_LOG(LogTerraDyne, Warning, TEXT("TerraDyne Import: Unable to create chunks for landscape %s."),
+			*MetadataLandscape->GetName());
+		if (UTerraDyneSubsystem* Sys = GetWorld()->GetSubsystem<UTerraDyneSubsystem>())
+		{
+			Sys->ShowNotification(
+				NSLOCTEXT("TerraDyne", "ImportNoChunks",
+					"Import failed: no TerraDyne chunks were created from the selected Landscape."),
+				ETerraDyneNotifySeverity::Error);
+		}
+		return;
+	}
+
 	RebuildChunkMap();
 	ApplyMaterialToActiveChunks();
 	ApplyGrassProfileToActiveChunks(LandscapeMigrationState.bImportedPaintLayers && Options.bRegenerateGrassFromImportedLayers);
 
 	if (Options.bHideSourceLandscape)
 	{
-		Source->SetActorHiddenInGame(true);
-		Source->SetIsTemporarilyHiddenInEditor(true);
+		TerraDyneWorldFramework::HideLandscapeHierarchy(MetadataLandscape ? MetadataLandscape : TargetLandscape);
 	}
 
 	bStreamingPaused = bPreviousStreamingPaused;
 
-	UE_LOG(LogTemp, Log, TEXT("TerraDyne Import: Imported %d landscape components from %s."), ImportedChunks, *Source->GetName());
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyne Import: Imported %d landscape components from %s."),
+		ImportedChunks, *MetadataLandscape->GetName());
 }
 #endif

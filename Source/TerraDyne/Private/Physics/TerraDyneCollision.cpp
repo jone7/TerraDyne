@@ -59,7 +59,7 @@ void UTerraDyneCollisionLib::ApplyHeightDataToMesh(
 			
 			if (HeightData.IsValidIndex(ArrayIdx))
 			{
-				double NewZ = (double)HeightData[ArrayIdx]; // ZScale is usually already baked into float cache
+				double NewZ = (double)(HeightData[ArrayIdx] * ZScale);
 				
 				// 4. Update Vertex
 				Mesh.SetVertex(VertID, FVector3d(Pos.X, Pos.Y, NewZ));
@@ -139,7 +139,14 @@ bool UTerraDyneCollisionLib::IsLocationTraceable(UDynamicMeshComponent* MeshComp
 		int32 ExpectedTopTris = 2 * (Resolution - 1) * (Resolution - 1);
 		if (Mesh.TriangleCount() < ExpectedTopTris) return; // Mesh layout mismatch — assume traceable
 
+		// WARNING: This assumes AppendRectangleXY produces exactly 2 triangles per cell
+		// in strict row-major order. If the mesh generation algorithm changes, this mapping
+		// will silently produce incorrect results. Consider using TMeshAABBTree3 queries.
 		int32 TriBase = (CellY * (Resolution - 1) + CellX) * 2;
+		if (!ensure(TriBase >= 0 && TriBase + 1 < Mesh.TriangleCount()))
+		{
+			return; // Safety: triangle index out of range
+		}
 
 		// Check MaterialID on both triangles in this cell (hole = non-zero MaterialID)
 		const UE::Geometry::FDynamicMeshMaterialAttribute* MatAttrib =

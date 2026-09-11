@@ -26,6 +26,8 @@ public class TerraDyneEditor : ModuleRules
 			"AssetRegistry",
 			"PropertyEditor",
 			"LevelEditor",
+			"ToolMenus",
+			"Projects", // Required for IPluginManager
 			"Landscape", // Required to read source Landscape data
 			"Foliage", // Required by LandscapeEdit.h (InstancedFoliageActor)
 			"RenderCore", // Required for Texture locking/baking

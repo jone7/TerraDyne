@@ -1,7 +1,9 @@
 // Copyright (c) 2026 GregOrigin. All Rights Reserved.
 #include "World/TerraDyneDemoMarkerActor.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Materials/Material.h"
 
 ATerraDyneDemoMarkerActor::ATerraDyneDemoMarkerActor()
 {
@@ -24,7 +26,7 @@ ATerraDyneDemoMarkerActor::ATerraDyneDemoMarkerActor()
 		MarkerMesh->SetStaticMesh(CylinderMesh.Object);
 	}
 
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BaseMaterial(
+	static ConstructorHelpers::FObjectFinder<UMaterial> BaseMaterial(
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	if (BaseMaterial.Succeeded())
 	{

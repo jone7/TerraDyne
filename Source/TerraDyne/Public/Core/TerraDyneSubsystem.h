@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Core/TerraDyneWorldTypes.h"
 #include "TerraDyneSubsystem.generated.h"
 
 // Forward Declarations
@@ -65,6 +66,10 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|System")
 	void FlushPendingTasks();
+
+	/** Display a notification to the user. Editor uses Slate toasts; runtime uses on-screen messages. */
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|System")
+	void ShowNotification(const FText& Message, ETerraDyneNotifySeverity Severity = ETerraDyneNotifySeverity::Info);
 
 private:
 	// Weak pointer avoids keeping the actor alive if the level is unloaded violently

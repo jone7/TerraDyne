@@ -40,9 +40,6 @@ public:
 	float BrushStrength = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|State")
-	float BrushFalloff = 0.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|State")
 	int32 ActiveLayerIndex = 0;
 
 public:

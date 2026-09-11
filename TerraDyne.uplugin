@@ -1,46 +1,42 @@
 {
-	"FileVersion": 3,
-	"Version": 3,
-	"VersionName": "0.3",
-	"FriendlyName": "TerraDyne",
-	"Description": "Persistent runtime world framework for Unreal Landscapes with authored-world conversion, runtime editing, foliage transfer, persistence, and gameplay hooks.",
-	"Category": "Terrain",
-	"CreatedBy": "GregOrigin",
-	"CreatedByURL": "www.gregorigin.com",
-	"DocsURL": "https://www.gregorigin.com",
-	"MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/terradyne",
-	"SupportURL": "mailto:andras@gregorigin.com",
-	"EngineVersion": "5.7.0",
-	"CanContainContent": true,
-	"IsBetaVersion": false,
-	"IsExperimentalVersion": false,
-	"Installed": true,
-	"Modules": [
-		{
-			"Name": "TerraDyne",
-			"Type": "Runtime",
-			"LoadingPhase": "Default",
-			"PlatformAllowList": [
-				"Win64"
-			]
-		},
-		{
-			"Name": "TerraDyneEditor",
-			"Type": "Editor",
-			"LoadingPhase": "Default",
-			"PlatformAllowList": [
-				"Win64"
-			]
-		}
-	],
-	"Plugins": [
-		{
-			"Name": "GeometryScripting",
-			"Enabled": true
-		},
-		{
-			"Name": "VirtualHeightfieldMesh",
-			"Enabled": true
-		}
-	]
+  "FileVersion": 3,
+  "Version": 4,
+  "VersionName": "0.4",
+  "FriendlyName": "TerraDyne",
+  "Description": "Persistent runtime world framework for Unreal Landscapes with authored-world conversion, runtime editing, foliage transfer, persistence, and gameplay hooks.",
+  "Category": "Terrain",
+  "CreatedBy": "GregOrigin",
+  "CreatedByURL": "www.gregorigin.com",
+  "DocsURL": "https://www.gregorigin.com",
+  "MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/terradyne",
+  "SupportURL": "mailto:andras@gregorigin.com",
+  "EngineVersion": "5.7.0",
+  "CanContainContent": true,
+  "IsBetaVersion": false,
+  "IsExperimentalVersion": false,
+  "Installed": true,
+  "Modules": [
+    {
+      "Name": "TerraDyne",
+      "Type": "Runtime",
+      "LoadingPhase": "Default",
+      "PlatformAllowList": [
+        "Win64"
+      ]
+    },
+    {
+      "Name": "TerraDyneEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default",
+      "PlatformAllowList": [
+        "Win64"
+      ]
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "GeometryScripting",
+      "Enabled": true
+    }
+  ]
 }

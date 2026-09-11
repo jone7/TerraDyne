@@ -54,6 +54,8 @@ bool FTerraDyneDemoSimulationTest::RunTest(const FString& Parameters)
 
 		for (const FExpectedTransition& Transition : ExpectedTransitions)
 		{
+			// NOTE: Direct Tick() bypasses FTimerManager. If Orchestrator uses engine timers,
+			// this test may not accurately simulate phase transitions.
 			Orchestrator->Tick(Transition.Duration);
 			TestTrue(
 				FString::Printf(TEXT("Phase advanced to %s"), Transition.Label),
@@ -61,6 +63,8 @@ bool FTerraDyneDemoSimulationTest::RunTest(const FString& Parameters)
 		}
 
 		// Interactive should stay indefinitely
+		// NOTE: Direct Tick() bypasses FTimerManager. If Orchestrator uses engine timers,
+		// this test may not accurately simulate phase transitions.
 		Orchestrator->Tick(100.0f);
 		TestTrue("Phase stays Interactive", Orchestrator->CurrentPhase == EShowcasePhase::Interactive);
 	}

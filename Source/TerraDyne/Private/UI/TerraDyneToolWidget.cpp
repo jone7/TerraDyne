@@ -15,10 +15,9 @@ void UTerraDyneToolWidget::NativeConstruct()
 	CurrentTool = ETerraDyneToolMode::SculptRaise;
 	BrushRadius = 2000.0f;
 	BrushStrength = 0.5f;
-	BrushFalloff = 0.5f;
 	ActiveLayerIndex = 0;
 	
-	UE_LOG(LogTemp, Log, TEXT("TerraDyneToolWidget constructed"));
+	UE_LOG(LogTerraDyne, Log, TEXT("TerraDyneToolWidget constructed"));
 }
 
 TSharedRef<SWidget> UTerraDyneToolWidget::RebuildWidget()
@@ -56,6 +55,13 @@ void UTerraDyneToolWidget::ResetTerrain()
 			{
 				UE_LOG(LogTerraDyne, Warning, TEXT("ResetTerrain: Buffer size mismatch on chunk [%d,%d], skipping."),
 					Chunk->GridCoordinate.X, Chunk->GridCoordinate.Y);
+				if (UTerraDyneSubsystem* Sys = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
+				{
+					Sys->ShowNotification(
+						FText::Format(NSLOCTEXT("TerraDyne", "BufferMismatch", "Buffer mismatch on chunk [{0},{1}], skipping reset."),
+							FText::AsNumber(Chunk->GridCoordinate.X), FText::AsNumber(Chunk->GridCoordinate.Y)),
+						ETerraDyneNotifySeverity::Warning);
+				}
 				continue;
 			}
 			for (int32 i = 0; i < Num; i++)
@@ -71,6 +77,7 @@ void UTerraDyneToolWidget::ResetTerrain()
 			}
 			Chunk->UploadWeightTexture();
 			Chunk->RebuildPhysicsMesh();
+			Chunk->RequestGrassRegen();
 		}
 	}
 	UE_LOG(LogTerraDyne, Warning, TEXT("UI: All Chunks Reset to Flat."));
@@ -78,9 +85,12 @@ void UTerraDyneToolWidget::ResetTerrain()
 
 void UTerraDyneToolWidget::ResetActiveLayer()
 {
-	UTerraDyneSubsystem* Subsystem = GetWorld()->GetSubsystem<UTerraDyneSubsystem>();
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	UTerraDyneSubsystem* Subsystem = World->GetSubsystem<UTerraDyneSubsystem>();
 	if (!Subsystem) return;
-	
+
 	ATerraDyneManager* Manager = Subsystem->GetTerrainManager();
 	if (!Manager) return;
 

@@ -3,12 +3,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Core/TerraDyneManager.h"
 #include "TerraDyneSceneSetup.generated.h"
 
 // Forward Declarations
-class ATerraDyneManager;
-class UMaterialInterface;
 class UTerraDyneWorldPreset;
+class UTerraDyneLandscapeAssetSet;
 
 UENUM(BlueprintType)
 enum class ETerraDyneDemoTemplate : uint8
@@ -33,29 +33,33 @@ public:
 
 	//--- Configuration Assets ---//
 	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
-	TObjectPtr<UMaterialInterface> DefaultLandscapeMaterial;
-
-	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
-	TObjectPtr<UMaterialInterface> HeightTool;
-
-	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
-	TObjectPtr<UMaterialInterface> WeightTool;
-
-	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
 	TSubclassOf<ATerraDyneManager> ManagerClass;
 
 	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
 	TObjectPtr<UTerraDyneWorldPreset> WorldPreset;
 
 	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
-	ETerraDyneDemoTemplate DemoTemplate = ETerraDyneDemoTemplate::Sandbox;
+	ETerraDyneDemoTemplate DemoTemplate = ETerraDyneDemoTemplate::SurvivalFramework;
+
+	// Forwarded to the spawned Manager when the AuthoredWorldConversion template runs.
+	UPROPERTY(EditAnywhere, Category = "TerraDyne Setup")
+	FTerraDyneLandscapeMigrationOptions MigrationOptions;
+
+	/** Runtime-safe authored-world payload generated from the editor conversion flow. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne Setup")
+	TObjectPtr<UTerraDyneLandscapeAssetSet> AuthoredWorldAssetSet;
+
+	/** When true, the authored conversion path prefers the baked asset set over live editor-only import. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne Setup")
+	bool bPreferBakedLandscapeData = true;
 
 	//--- Actions ---//
 	
 	// The "One Button Solution"
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "TerraDyne Setup")
-	void InitializeWorld();
+	void InitializeWorld(class ALandscapeProxy* TargetLandscape = nullptr);
 
-private:
-	void SpawnLighting();
+	UFUNCTION(BlueprintPure, Category = "TerraDyne Setup")
+	bool HasRuntimeAuthoredWorldData() const { return AuthoredWorldAssetSet != nullptr; }
+
 };

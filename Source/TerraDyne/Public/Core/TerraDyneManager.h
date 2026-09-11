@@ -14,16 +14,27 @@ class ALandscapeProxy;
 class ULandscapeComponent;
 class UMaterialInterface;
 class UTerraDyneGrassProfile;
+class UTerraDyneLandscapeAssetSet;
 class ULandscapeLayerInfoObject;
 class USceneComponent;
 class ATerraDyneEditController; // forward declare for SendFullSyncToController
+class UTerraDyneReplicationComponent;
 class UTerraDyneWorldPreset;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FTerraDyneWorldSaveCompletedDelegate,
+	const FString&,
+	SlotName,
+	bool,
+	bSuccess);
 
 /** Buffers snapshot for a single chunk before a stroke begins. */
 struct FTerraDyneChunkSnapshot
 {
 	FIntPoint Coordinate;
+	TArray<float> BaseBuffer;
 	TArray<float> SculptBuffer;
+	TArray<float> DetailBuffer;
 	TArray<TArray<float>> WeightBuffers; // 4 entries, one per weight layer
 };
 
@@ -82,6 +93,10 @@ struct FTerraDyneLandscapeMigrationOptions
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|Migration")
 	bool bTransferredFoliageFollowsTerrain = true;
+
+	/** Fail safely instead of silently filling authored Landscape visibility holes. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|Migration")
+	bool bRejectLandscapeVisibilityHoles = true;
 };
 
 UCLASS(Blueprintable)
@@ -182,14 +197,41 @@ public:
 		float Radius,
 		float Strength,
 		ETerraDyneBrushMode BrushMode,
+		ETerraDyneLayer TargetLayer = ETerraDyneLayer::Sculpt,
 		int32 WeightLayerIndex = 0,
 		float FlattenHeight = 0.f);
 
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Interaction")
 	void ApplyGlobalNoise(float Strength, float Frequency, float Seed);
 
+	/** Server-owned integration entry point for gameplay-authorized edits (craters, digging, construction, etc.). */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "TerraDyne|Interaction")
+	bool ApplyAuthorizedBrush(
+		const FTerraDyneBrushParams& Params,
+		bool bReplicateToRelevantClients = true);
+
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Query")
 	ATerraDyneChunk* GetChunkAtLocation(FVector WorldLocation) const;
+
+	UFUNCTION(BlueprintPure, Category = "TerraDyne|PCG")
+	float GetWorldHeightAtLocation(FVector WorldLocation) const;
+
+	UFUNCTION(BlueprintPure, Category = "TerraDyne|PCG")
+	float GetWorldWeightAtLocation(FVector WorldLocation, int32 LayerIndex) const;
+
+	UFUNCTION(BlueprintPure, Category = "TerraDyne|Streaming")
+	TArray<FIntPoint> GetActiveChunkCoordinates() const;
+
+	/** Versioned/CRC-checked packet for external databases or project-owned persistence. */
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Persistence")
+	bool ExportChunkStatePacket(FIntPoint Coordinate, TArray<uint8>& OutPacket, FString& OutError) const;
+
+	/** Apply a packet previously returned by ExportChunkStatePacket. Server-only for authoritative worlds. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "TerraDyne|Persistence")
+	bool ImportChunkStatePacket(
+		const TArray<uint8>& Packet,
+		FString& OutError,
+		bool bReplicateToRelevantClients = true);
 
 	/** Returns all active chunks whose AABB overlaps the given world-space circle. */
 	TArray<ATerraDyneChunk*> GetChunksInRadius(FVector WorldLocation, float Radius);
@@ -206,16 +248,23 @@ public:
 	void Undo(APlayerController* Controller);
 	void Redo(APlayerController* Controller);
 
-	/** Server → All Clients: broadcast a brush application so every client updates visuals. */
-	UFUNCTION(NetMulticast, Reliable)
+	/**
+	 * Route a brush to relevant connection-owned replication components.
+	 * The legacy name is retained for source/Blueprint compatibility; this is no longer a NetMulticast RPC.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Multiplayer")
 	void Multicast_ApplyBrush(const FTerraDyneBrushParams& Params);
 
-	/** Send all current chunk data to a specific controller (late-join sync). Server only. */
+	/** Compatibility wrapper for the built-in edit controller. Server only. */
 	void SendFullSyncToController(ATerraDyneEditController* Controller);
+	void SendFullSyncToReplicationComponent(UTerraDyneReplicationComponent* ReplicationComponent);
+	bool SendChunkStateToReplicationComponent(
+		UTerraDyneReplicationComponent* ReplicationComponent,
+		const FTerraDyneChunkData& Data);
 
-	/** Server → All Clients: replay the full terrain state after an undo/redo. */
-	UFUNCTION(NetMulticast, Reliable)
-	void Multicast_SyncChunkState(FIntPoint Coord, const TArray<float>& InSculptBuffer, const TArray<uint8>& InWeightData);
+	/** Relevant-client fragmented state correction used after undo/redo. */
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Multiplayer")
+	void Multicast_SyncChunkState(const FTerraDyneChunkData& Data);
 
 	/** Remove undo/redo stacks for a disconnected player. */
 	void CleanupPlayerStacks(APlayerController* Controller);
@@ -223,7 +272,7 @@ public:
 	/** Returns true if a stroke is pending for the given controller. */
 	bool HasPendingStroke(APlayerController* Controller) const
 	{
-		return PendingStroke.IsSet() && PendingStrokeOwner == Controller;
+		return PendingStrokes.Contains(Controller);
 	}
 
 	/** Returns true if undo is available for this player. */
@@ -260,6 +309,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|System")
 	void SaveWorld(FString SlotName = "TerraDyneSave");
 
+	UFUNCTION(BlueprintPure, Category = "TerraDyne|System")
+	bool IsWorldSaveInProgress() const { return bWorldSaveInProgress; }
+
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|System")
 	void LoadWorld(FString SlotName = "TerraDyneSave");
 
@@ -268,6 +320,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Migration")
 	void SetAuthoredChunkCoordinates(const TArray<FIntPoint>& ChunkCoords, bool bWasImportedFromLandscape = true);
+
+	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Migration")
+	bool InitializeFromBakedLandscapeAssetSet(UTerraDyneLandscapeAssetSet* AssetSet, bool bClearExistingChunks = true);
 
 	UFUNCTION(BlueprintCallable, Category = "TerraDyne|Framework")
 	void ApplyWorldPreset(UTerraDyneWorldPreset* Preset = nullptr);
@@ -332,9 +387,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "TerraDyne|Events")
 	FTerraDynePopulationChangedDelegate OnPopulationChanged;
 
+	UPROPERTY(BlueprintAssignable, Category = "TerraDyne|Events")
+	FTerraDyneWorldSaveCompletedDelegate OnWorldSaveCompleted;
+
 	/** When true, streaming is frozen — no chunks are loaded or unloaded. */
 	UPROPERTY(Transient, BlueprintReadWrite, Category = "TerraDyne|Streaming")
 	bool bStreamingPaused = false;
+
+	/** Toggle chunk boundary debug visualization. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TerraDyne|Debug")
+	bool bShowDebugOverlay = false;
 
 	//--- STATS ---
 	UFUNCTION(BlueprintPure, Category = "TerraDyne|Stats")
@@ -348,16 +410,11 @@ public:
 
 	//--- EDITOR TOOLS ---
 #if WITH_EDITOR
-	UFUNCTION(BlueprintCallable, CallInEditor, Category = "TerraDyne|Tools")
-	void ManualImport();
-
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "TerraDyne|Migration")
 	void MigrateLandscapeProject();
 
-	void ImportFromLandscape(ALandscapeProxy* TargetLandscape, bool bHideSource = true);
 	void ImportFromLandscapeWithOptions(ALandscapeProxy* TargetLandscape, const FTerraDyneLandscapeMigrationOptions& Options);
 	void ResampleLandscapeData(ATerraDyneChunk* Chunk, ULandscapeComponent* SourceComponent, bool bImportWeightLayers);
-	void ImportInternal(ALandscapeProxy* Source, const FTerraDyneLandscapeMigrationOptions& Options);
 #endif
 
 protected:
@@ -383,12 +440,18 @@ private:
 
 	bool bMaterialsLoaded = false;
 	float LODTimer = 0.25f;
+	int32 LODUpdateCursor = 0;
 
 	// --- Streaming ---
 	// Streaming iterates all player controllers and computes the union of load regions.
 	TSet<FIntPoint> PendingLoadQueue;
 	TSet<FIntPoint> PendingUnloadQueue;
 	TSet<FIntPoint> DirtyChunkSet;
+	// Dirty snapshots stay readable in memory until their atomic async cache write succeeds.
+	TMap<FIntPoint, FTerraDyneChunkData> PendingChunkCacheWrites;
+	TMap<FIntPoint, uint64> ChunkCacheWriteGenerations;
+	TMap<FIntPoint, double> ChunkCacheRetryAfterSeconds;
+	uint64 NextChunkCacheWriteGeneration = 1;
 	TSet<FIntPoint> ImportedChunkCoords;
 	TMap<FGuid, int32> PopulationEntryIndexById;
 	TMap<FIntPoint, int32> ProceduralChunkStateIndexByCoord;
@@ -397,6 +460,10 @@ private:
 	TSet<FGuid> PopulationDestroyInProgress;
 	uint32 LastStreamingHash = 0;
 	float PopulationMaintenanceTimer = 0.0f;
+	TArray<FBox> PendingNavigationDirtyAreas;
+	float NavigationDirtyTimer = 0.0f;
+	bool bWorldSaveInProgress = false;
+	FString QueuedWorldSaveSlot;
 
 	FIntPoint WorldToChunkCoord(const FVector& WorldPos) const;
 	void UpdateStreaming(const TArray<FVector>& PlayerPositions);
@@ -441,16 +508,20 @@ private:
 	void BroadcastPopulationChanged(
 		const FTerraDynePersistentPopulationEntry& Entry,
 		FName Reason);
+	bool IsControllerRelevantToLocation(const APlayerController* Controller, FVector Location) const;
+	void BroadcastChunkStateToRelevantClients(const FTerraDyneChunkData& Data);
 	void RefreshNavigationForBounds(const FBox& Bounds, bool bPopulationChange = false);
+	void FlushPendingNavigationDirtyAreas();
 	float GetSlopeDegreesAtLocation(FVector WorldLocation) const;
 
 	// --- Undo/Redo ---
 	// NOTE: Undo/redo entries referencing unloaded (streamed-out) chunks are silently skipped.
 	// A future improvement could persist undo snapshots alongside chunk cache data.
+	// SAFETY: Raw pointers are used because FTerraDyneUndoEntry is not a USTRUCT.
+	// CleanupPlayerStacks() is bound via OnDestroyed delegate in BeginPlay.
 	TMap<APlayerController*, TArray<FTerraDyneUndoEntry>> UndoStacks;
 	TMap<APlayerController*, TArray<FTerraDyneUndoEntry>> RedoStacks;
-	TOptional<FTerraDyneUndoEntry> PendingStroke;
-	APlayerController* PendingStrokeOwner = nullptr;
+	TMap<APlayerController*, FTerraDyneUndoEntry> PendingStrokes;
 
 	void LoadMaterials();
 	void SetupLighting();

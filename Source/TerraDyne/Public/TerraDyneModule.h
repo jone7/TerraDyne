@@ -4,6 +4,9 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+// Keep in sync with TerraDyne.uplugin VersionName
+#define TERRADYNE_VERSION_STRING TEXT("0.3.1")
+
 // Declare a custom log category for the plugin.
 // Usage in code: UE_LOG(LogTerraDyne, Warning, TEXT("Message"));
 TERRADYNE_API DECLARE_LOG_CATEGORY_EXTERN(LogTerraDyne, Log, All);

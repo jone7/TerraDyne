@@ -29,4 +29,9 @@ public:
 	{
 		return FModuleManager::Get().IsModuleLoaded("TerraDyneEditor");
 	}
+
+private:
+	void RegisterMenus();
+	void PluginButtonClicked();
+	TSharedRef<class SDockTab> OnSpawnPluginTab(const class FSpawnTabArgs& SpawnTabArgs);
 };

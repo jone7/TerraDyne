@@ -1,10 +1,12 @@
 // Copyright (c) 2026 GregOrigin. All Rights Reserved.
 #include "World/TerraDyneProjectile.h"
+#include "TerraDyneModule.h"
 #include "Core/TerraDyneManager.h"
 #include "Core/TerraDyneSubsystem.h"
 #include "World/TerraDyneChunk.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "Engine/StaticMesh.h"
 #include "UObject/ConstructorHelpers.h"
 #include "DrawDebugHelpers.h"
@@ -56,7 +58,7 @@ void ATerraDyneProjectile::BeginPlay()
 	
 	SetActorScale3D(FVector(2.0f));
 	
-	UE_LOG(LogTemp, Verbose, TEXT("Meteor spawned at %s"), *GetActorLocation().ToString());
+	UE_LOG(LogTerraDyne, Verbose, TEXT("Meteor spawned at %s"), *GetActorLocation().ToString());
 }
 
 void ATerraDyneProjectile::Tick(float DeltaTime)
@@ -76,17 +78,28 @@ void ATerraDyneProjectile::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActo
 	if (bHasImpacted) return;
 	bHasImpacted = true;
 
-	UE_LOG(LogTemp, Log, TEXT("Meteor IMPACT at %s on %s"), *Hit.Location.ToString(), 
+	UE_LOG(LogTerraDyne, Log, TEXT("Meteor IMPACT at %s on %s"), *Hit.Location.ToString(), 
 		OtherActor ? *OtherActor->GetName() : TEXT("NULL"));
 
 	// Visual debug - Reduced clutter
 	// DrawDebugSphere(GetWorld(), Hit.Location, CraterRadius, 32, FColor::Orange, false, 3.0f, 0, 10.0f);
 	
-	// Apply terrain deformation
-	ApplyTerrainDeformation(Hit.Location);
-
-	// Destroy self
-	Destroy();
+	FVector HitLocation = Hit.Location;
+	float ImpactRadius = CraterRadius;
+	float ImpactDepth = CraterDepth;
+	
+	TWeakObjectPtr<ATerraDyneProjectile> WeakThis(this);
+	GetWorld()->GetTimerManager().SetTimerForNextTick([WeakThis, HitLocation, ImpactRadius, ImpactDepth]()
+	{
+		if (ATerraDyneProjectile* Proj = WeakThis.Get())
+		{
+			// Apply terrain deformation
+			Proj->ApplyTerrainDeformation(HitLocation);
+			
+			// Destroy self
+			Proj->Destroy();
+		}
+	});
 }
 
 void ATerraDyneProjectile::ApplyTerrainDeformation(const FVector& ImpactLocation)
@@ -116,15 +129,21 @@ void ATerraDyneProjectile::ApplyTerrainDeformation(const FVector& ImpactLocation
 	{
 		// Apply crater (negative strength = dig) to the SCULPT layer
 		float Strength = CraterDepth;
-		Manager->ApplyGlobalBrush(ImpactLocation, CraterRadius, Strength, ETerraDyneBrushMode::Lower);
+		Manager->ApplyGlobalBrush(ImpactLocation, CraterRadius, Strength, ETerraDyneBrushMode::Lower, ETerraDyneLayer::Sculpt);
 
 		// Apply scorch mark (paint layer 1)
-		Manager->ApplyGlobalBrush(ImpactLocation, CraterRadius * 1.2f, 1.0f, ETerraDyneBrushMode::Paint, 1);
+		Manager->ApplyGlobalBrush(
+			ImpactLocation,
+			CraterRadius * 1.2f,
+			1.0f,
+			ETerraDyneBrushMode::Paint,
+			ETerraDyneLayer::Sculpt,
+			1);
 		
-		UE_LOG(LogTemp, Log, TEXT("Crater applied to Sculpt layer: Radius=%.0f, Depth=%.0f"), CraterRadius, CraterDepth);
+		UE_LOG(LogTerraDyne, Log, TEXT("Crater applied to Sculpt layer: Radius=%.0f, Depth=%.0f"), CraterRadius, CraterDepth);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("No TerraDyneManager found!"));
+		UE_LOG(LogTerraDyne, Error, TEXT("No TerraDyneManager found!"));
 	}
 }

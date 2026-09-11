@@ -5,11 +5,74 @@
 #include "World/TerraDyneChunk.h"
 #include "World/TerraDyneOrchestrator.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/App.h"
 
 #if WITH_EDITOR
 #include "Tests/AutomationEditorCommon.h"
+
+namespace TerraDyneMigrationTests
+{
+	class FWaitForMigrationSaveCommand final : public IAutomationLatentCommand
+	{
+	public:
+		FWaitForMigrationSaveCommand(
+			FAutomationTestBase* InTest,
+			ATerraDyneManager* InManager,
+			FString InSlotName)
+			: Test(InTest)
+			, Manager(InManager)
+			, SlotName(MoveTemp(InSlotName))
+			, DeadlineSeconds(FPlatformTime::Seconds() + 10.0)
+		{
+		}
+
+		virtual bool Update() override
+		{
+			if (!UGameplayStatics::DoesSaveGameExist(SlotName, 0))
+			{
+				if (FPlatformTime::Seconds() < DeadlineSeconds)
+				{
+					return false;
+				}
+				Test->AddError(FString::Printf(TEXT("Timed out waiting for async migration save slot '%s'."), *SlotName));
+				return true;
+			}
+
+			ATerraDyneManager* ManagerPtr = Manager.Get();
+			if (!ManagerPtr)
+			{
+				Test->AddError(TEXT("Manager was destroyed before migration save validation."));
+				UGameplayStatics::DeleteGameInSlot(SlotName, 0);
+				return true;
+			}
+
+			ManagerPtr->LoadWorld(SlotName);
+			Test->TestEqual(TEXT("Manager location restored"), ManagerPtr->GetActorLocation(), FVector(123.0f, 456.0f, 789.0f));
+			Test->TestEqual(TEXT("GlobalChunkSize restored"), ManagerPtr->GlobalChunkSize, 2048.0f);
+			Test->TestTrue(TEXT("Landscape migration flag restored"), ManagerPtr->LandscapeMigrationState.bWasImportedFromLandscape);
+			Test->TestEqual(TEXT("Source landscape name restored"), ManagerPtr->LandscapeMigrationState.SourceLandscapeName, FString(TEXT("TestLandscape")));
+			Test->TestEqual(TEXT("Layer mapping count restored"), ManagerPtr->LandscapeMigrationState.LayerMappings.Num(), 2);
+			Test->TestEqual(TEXT("Unmapped layer count restored"), ManagerPtr->LandscapeMigrationState.UnmappedLayerNames.Num(), 1);
+			Test->TestEqual(TEXT("Procedural seed restored"), ManagerPtr->ProceduralWorldSettings.WorldSeed, 20260314);
+			Test->TestEqual(TEXT("Biome overlay count restored"), ManagerPtr->BiomeOverlays.Num(), 1);
+			Test->TestEqual(TEXT("Build permission zone count restored"), ManagerPtr->BuildPermissionZones.Num(), 1);
+			Test->TestNotNull(TEXT("Master material restored"), ManagerPtr->MasterMaterial.Get());
+
+			UGameplayStatics::DeleteGameInSlot(SlotName, 0);
+			return true;
+		}
+
+	private:
+		FAutomationTestBase* Test = nullptr;
+		TWeakObjectPtr<ATerraDyneManager> Manager;
+		FString SlotName;
+		double DeadlineSeconds = 0.0;
+	};
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneMigrationSaveLoadTest,
 	"TerraDyne.Migration.SaveLoadRoundTrip",
@@ -87,20 +150,8 @@ bool FTerraDyneMigrationSaveLoadTest::RunTest(const FString& Parameters)
 	Manager->MasterMaterial = nullptr;
 	Manager->LandscapeMigrationState = FTerraDyneLandscapeMigrationState();
 
-	Manager->LoadWorld(SlotName);
-
-	TestEqual("Manager location restored", Manager->GetActorLocation(), FVector(123.0f, 456.0f, 789.0f));
-	TestEqual("GlobalChunkSize restored", Manager->GlobalChunkSize, 2048.0f);
-	TestTrue("Landscape migration flag restored", Manager->LandscapeMigrationState.bWasImportedFromLandscape);
-	TestEqual("Source landscape name restored", Manager->LandscapeMigrationState.SourceLandscapeName, FString(TEXT("TestLandscape")));
-	TestEqual("Layer mapping count restored", Manager->LandscapeMigrationState.LayerMappings.Num(), 2);
-	TestEqual("Unmapped layer count restored", Manager->LandscapeMigrationState.UnmappedLayerNames.Num(), 1);
-	TestEqual("Procedural seed restored", Manager->ProceduralWorldSettings.WorldSeed, 20260314);
-	TestEqual("Biome overlay count restored", Manager->BiomeOverlays.Num(), 1);
-	TestEqual("Build permission zone count restored", Manager->BuildPermissionZones.Num(), 1);
-	TestNotNull("Master material restored", Manager->MasterMaterial.Get());
-
-	UGameplayStatics::DeleteGameInSlot(SlotName, 0);
+	ADD_LATENT_AUTOMATION_COMMAND(
+		TerraDyneMigrationTests::FWaitForMigrationSaveCommand(this, Manager, SlotName));
 	return true;
 }
 
@@ -152,7 +203,7 @@ bool FTerraDyneShowcaseMaterialSelectionTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Showcase uses the TerraDyne mesh-compatible terrain material"),
 		Manager->MasterMaterial->GetPathName(),
-		FString(TEXT("/Game/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master")));
+		FString(TEXT("/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master")));
 
 	ATerraDyneChunk* Chunk = Manager->GetChunkAtCoord(FIntPoint::ZeroValue);
 	TestNotNull("Showcase authored chunk spawned", Chunk);
@@ -186,9 +237,9 @@ bool FTerraDyneChunkMaterialBindingTest::RunTest(const FString& Parameters)
 	Chunk->ChunkSizeWorldUnits = 2048.0f;
 	Chunk->ZScale = 768.0f;
 	Chunk->BrushMaterialBase = LoadObject<UMaterialInterface>(nullptr,
-		TEXT("/Game/TerraDyne/Materials/Tools/M_HeightBrush.M_HeightBrush"));
+		TEXT("/TerraDyne/Materials/Tools/M_HeightBrush.M_HeightBrush"));
 	UMaterialInterface* MasterMaterial = LoadObject<UMaterialInterface>(nullptr,
-		TEXT("/Game/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master"));
+		TEXT("/TerraDyne/Materials/VHFM/M_TerraDyne_Master.M_TerraDyne_Master"));
 	TestNotNull("Height brush material", Chunk->BrushMaterialBase.Get());
 	TestNotNull("Master material", MasterMaterial);
 	if (!Chunk->BrushMaterialBase || !MasterMaterial)
@@ -197,6 +248,29 @@ bool FTerraDyneChunkMaterialBindingTest::RunTest(const FString& Parameters)
 	}
 
 	Chunk->Initialize(32, 2048.0f);
+	const bool bRenderResourcesExpected = FApp::CanEverRender() && !IsRunningDedicatedServer();
+	if (!bRenderResourcesExpected)
+	{
+		AddInfo(TEXT("Headless runtime detected; validating that rendering resources stay unallocated while CPU terrain state remains usable."));
+		TestNull("Headless chunk should not allocate a height RT", Chunk->HeightRT.Get());
+		TestNull("Headless chunk should not allocate a weight texture", Chunk->WeightTexture.Get());
+		Chunk->SetMaterial(MasterMaterial);
+		TestNull("Headless chunk should not create a dynamic terrain MID",
+			Cast<UMaterialInstanceDynamic>(Chunk->DynamicMeshComp->GetMaterial(0)));
+
+		const int32 NumSamples = Chunk->Resolution * Chunk->Resolution;
+		Chunk->BaseBuffer.Init(0.6f, NumSamples);
+		Chunk->SculptBuffer.Init(0.0f, NumSamples);
+		Chunk->DetailBuffer.Init(0.0f, NumSamples);
+		Chunk->HeightBuffer.Init(0.6f, NumSamples);
+		const FTerraDyneChunkData SerializedData = Chunk->GetSerializedData();
+		TestEqual("Serialized height sample count", SerializedData.HeightData.Num(), NumSamples);
+		TestTrue("CPU height state remains serializable in headless mode",
+			SerializedData.HeightData.Num() > 0 &&
+			FMath::IsNearlyEqual(SerializedData.HeightData[0], 0.6f, 0.02f));
+		return true;
+	}
+
 	if (!Chunk->IsUsingGPU())
 	{
 		AddInfo(TEXT("GPU terrain path unavailable under the current automation RHI; validating material bindings with CPU fallback."));
@@ -229,7 +303,7 @@ bool FTerraDyneChunkMaterialBindingTest::RunTest(const FString& Parameters)
 
 	const FTerraDyneChunkData SerializedData = Chunk->GetSerializedData();
 	TestEqual("Serialized height sample count", SerializedData.HeightData.Num(), NumSamples);
-	TestTrue("Height RT stays synchronized after CPU mesh rebuild",
+	TestTrue("Serialized height stays synchronized after CPU mesh rebuild",
 		SerializedData.HeightData.Num() > 0 &&
 		FMath::IsNearlyEqual(SerializedData.HeightData[0], 0.6f, 0.02f));
 

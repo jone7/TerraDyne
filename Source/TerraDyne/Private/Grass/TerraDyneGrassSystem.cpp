@@ -1,5 +1,6 @@
 // Copyright (c) 2026 GregOrigin. All Rights Reserved.
 #include "Grass/TerraDyneGrassSystem.h"
+#include "Async/Async.h"
 #include "World/TerraDyneChunk.h"
 #include "Async/AsyncWork.h"
 #include "Async/TaskGraphInterfaces.h"
