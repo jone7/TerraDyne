@@ -17,7 +17,10 @@ class TERRADYNE_API ATerraDyneChunk : public AActor
 	friend class FTerraDyneChunkMeshBuildTask;
 
 public:
-	ATerraDyneChunk();
+	/** 最近请求的高度网格已安装后，调用方才可交接源地形碰撞。 */
+	bool IsSurfaceReadyForHandoff() const { return !bMeshDirty && !bMeshBuildInFlight && PendingMeshBuildSerial == INDEX_NONE; }
+	// Cooker 可注入异步碰撞交接组件，普通 TerraDyne 仍使用默认组件。
+	ATerraDyneChunk(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UPROPERTY(VisibleAnywhere, Category = "TerraDyne")
@@ -31,6 +34,17 @@ public:
 
 	UPROPERTY(EditAnywhere, Replicated, Category = "TerraDyne")
 	int32 Resolution;
+
+	/** 地表 UV0 的缩放；Cooker 用源 Landscape 网格坐标保持纹理对齐，不复制到网络。 */
+	FVector2D SurfaceUVScale = FVector2D(1, 1);
+	/** 地表 UV0 的源块偏移；邻块使用同一 Landscape 原点。 */
+	FVector2D SurfaceUVOffset = FVector2D::ZeroVector;
+	/** 显示权重的原始分辨率；零表示使用普通 TerraDyne 的当前分辨率。 */
+	int32 SurfaceWeightResolution = 0;
+    /** Cooker 可指定原分辨率权重贴图；未指定的插件地形使用自身可编辑权重。 */
+    UPROPERTY(Transient) TObjectPtr<UTexture2D> SurfaceWeightTexture;
+	/** Cooker 从原地形及跨块坡度派生的法线快照，不参与插件网络或保存。 */
+	TArray<FVector3f> SurfaceNormals;
 
 	UPROPERTY(VisibleAnywhere, Replicated, Category = "TerraDyne")
 	FIntPoint GridCoordinate;
@@ -61,9 +75,6 @@ public:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextureRenderTarget2D> HeightRT; // Current height RT (read target for display/collision)
-
-	UPROPERTY(Transient)
-	TObjectPtr<UTextureRenderTarget2D> HeightRT_Swap; // Ping-pong write target for GPU brush
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> HeightUploadTexture;
@@ -163,9 +174,8 @@ protected:
 
 private:
 	bool bInitialized;
-	bool bUseGPU;
-	bool bHeightRTReadbackIsVerticallyFlipped;
-	bool bSkipHeightRenderTargetUploadOnNextMeshRebuild;
+	// 当前开源适配只支持 CPU 笔刷；供原有能力查询返回准确状态。
+	const bool bUseGPU = false;
 	void UpdateDisplayMaterialParameters();
 	
 	// Collision Throttling
@@ -195,15 +205,11 @@ private:
 	TArray<FTransform> TransferredActorFoliageInstanceLocalTransforms;
 	TArray<float> TransferredActorFoliageInstanceTerrainOffsets;
 
-	bool SetupGPU();
+	// 为 CPU 高度上传建立显示资源，禁止 GPU 计算和回读。
+	void SetupHeightDisplayResources();
+	/** 为当前分辨率建立线性权重纹理；加载烘焙块与新建块使用同一入口。 */
+	void SetupWeightDisplayResources();
 	void UpdateRenderTargetFromHeightmap();
-	bool ApplyBrushGPU(
-		FVector LocalPos,
-		float Radius,
-		float Strength,
-		ETerraDyneBrushMode BrushMode,
-		ETerraDyneLayer TargetLayer,
-		float FlattenHeight);
 	bool HasTerrainMeshTopology() const;
 	void BuildTerrainSurfaceSamples(TArray<FVector3d>& OutVertexPositions, TArray<FVector3f>& OutVertexNormals) const;
 	void InitializeTerrainMeshTopology(const TArray<FVector3d>& VertexPositions, const TArray<FVector3f>& VertexNormals);

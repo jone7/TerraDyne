@@ -10,7 +10,6 @@
 #include "Core/TerraDyneSubsystem.h"
 #include "Grass/TerraDyneGrassSystem.h"
 #include "Settings/TerraDyneSettings.h"
-#include "Shaders/TerraDyneSimulationShader.h"
 #include "CoreMinimal.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
@@ -86,76 +85,7 @@ static void ApplyTerrainMaterialParameters(
 		(Resolution > 1) ? (1.0f / static_cast<float>(Resolution - 1)) : 0.0f);
 }
 
-static bool ReadFloatHeightRenderTarget(FTextureRenderTargetResource* RenderTargetResource, TArray<float>& OutHeightSamples)
-{
-	if (!RenderTargetResource)
-	{
-		return false;
-	}
-
-	TArray<FFloat16Color> Readback;
-	if (!RenderTargetResource->ReadFloat16Pixels(Readback, FReadSurfaceDataFlags(RCM_MinMax)))
-	{
-		return false;
-	}
-
-	OutHeightSamples.SetNumUninitialized(Readback.Num());
-	for (int32 Index = 0; Index < Readback.Num(); ++Index)
-	{
-		OutHeightSamples[Index] = Readback[Index].R.GetFloat();
-	}
-
-	return true;
-}
-
-static float ComputeHeightReadbackError(
-	const TArray<float>& Readback,
-	const TArray<float>& Reference,
-	int32 Resolution,
-	bool bVerticalFlip)
-{
-	if (Readback.Num() != Reference.Num() || Resolution <= 0)
-	{
-		return TNumericLimits<float>::Max();
-	}
-
-	float MaxError = 0.0f;
-	const int32 SampleStride = FMath::Max(1, Readback.Num() / 16);
-	for (int32 Index = 0; Index < Readback.Num(); Index += SampleStride)
-	{
-		const int32 X = Index % Resolution;
-		const int32 Y = Index / Resolution;
-		const int32 ReferenceIndex = bVerticalFlip
-			? ((Resolution - 1 - Y) * Resolution) + X
-			: Index;
-		MaxError = FMath::Max(MaxError, FMath::Abs(Readback[Index] - Reference[ReferenceIndex]));
-	}
-
-	return MaxError;
-}
-
-static void ReorderHeightReadbackIfNeeded(TArray<float>& HeightSamples, int32 Resolution, bool bVerticalFlip)
-{
-	if (!bVerticalFlip || Resolution <= 0 || HeightSamples.Num() != Resolution * Resolution)
-	{
-		return;
-	}
-
-	TArray<float> ReorderedSamples;
-	ReorderedSamples.SetNumUninitialized(HeightSamples.Num());
-	for (int32 Y = 0; Y < Resolution; ++Y)
-	{
-		const int32 SourceRow = Y * Resolution;
-		const int32 DestRow = (Resolution - 1 - Y) * Resolution;
-		for (int32 X = 0; X < Resolution; ++X)
-		{
-			ReorderedSamples[DestRow + X] = HeightSamples[SourceRow + X];
-		}
-	}
-
-	HeightSamples = MoveTemp(ReorderedSamples);
-}
-
+/** 从高度生成朝上的地形法线，碰撞和显示共用同一顶点坐标。 */
 static void BuildTerrainSurfaceSamples(
 	const TArray<float>& HeightSamples,
 	int32 Resolution,
@@ -204,7 +134,8 @@ static void BuildTerrainSurfaceSamples(
 				static_cast<float>(2.0 * Step),
 				static_cast<float>(SampleHeight(X, Y + 1) - SampleHeight(X, Y - 1)));
 
-			FVector SurfaceNormal = FVector::CrossProduct(TangentY, TangentX);
+			// 地形法线必须朝向天空，避免原地表材质被判为背面或岩壁。
+			FVector SurfaceNormal = FVector::CrossProduct(TangentX, TangentY);
 			if (!SurfaceNormal.Normalize())
 			{
 				SurfaceNormal = FVector::UpVector;
@@ -261,40 +192,6 @@ static float ClampEditableLayerValue(float Value, ETerraDyneLayer Layer)
 	case ETerraDyneLayer::Sculpt:
 	default:
 		return FMath::Clamp(Value, -1.0f, 1.0f);
-	}
-}
-
-static void RebuildEditedLayerFromCombinedHeight(
-	ETerraDyneLayer TargetLayer,
-	TArray<float>& BaseBuffer,
-	TArray<float>& SculptBuffer,
-	TArray<float>& DetailBuffer,
-	TArray<float>& HeightBuffer)
-{
-	TargetLayer = NormalizeEditableLayer(TargetLayer);
-	for (int32 Index = 0; Index < HeightBuffer.Num(); ++Index)
-	{
-		switch (TargetLayer)
-		{
-		case ETerraDyneLayer::Base:
-			BaseBuffer[Index] = ClampEditableLayerValue(
-				HeightBuffer[Index] - SculptBuffer[Index] - DetailBuffer[Index],
-				ETerraDyneLayer::Base);
-			break;
-		case ETerraDyneLayer::Detail:
-			DetailBuffer[Index] = ClampEditableLayerValue(
-				HeightBuffer[Index] - BaseBuffer[Index] - SculptBuffer[Index],
-				ETerraDyneLayer::Detail);
-			break;
-		case ETerraDyneLayer::Sculpt:
-		default:
-			SculptBuffer[Index] = ClampEditableLayerValue(
-				HeightBuffer[Index] - BaseBuffer[Index] - DetailBuffer[Index],
-				ETerraDyneLayer::Sculpt);
-			break;
-		}
-
-		HeightBuffer[Index] = FMath::Clamp(BaseBuffer[Index] + SculptBuffer[Index] + DetailBuffer[Index], 0.0f, 1.0f);
 	}
 }
 
@@ -459,46 +356,6 @@ static void ApplyFlattenCPUInternal(
 	}
 }
 
-static void ApplyFlattenToCombinedHeightCPUInternal(
-	TArray<float>& CombinedHeightBuffer,
-	int32 Resolution,
-	float WorldSize,
-	FVector LocalPos,
-	float Radius,
-	float Strength,
-	float FlattenHeightNorm)
-{
-	float HalfSize = WorldSize * 0.5f;
-	float Step = WorldSize / (Resolution - 1);
-
-	int32 CenterX = FMath::RoundToInt((LocalPos.X + HalfSize) / Step);
-	int32 CenterY = FMath::RoundToInt((LocalPos.Y + HalfSize) / Step);
-	int32 RadiusInPixels = FMath::CeilToInt(Radius / Step);
-
-	int32 MinX = FMath::Max(0, CenterX - RadiusInPixels);
-	int32 MaxX = FMath::Min(Resolution - 1, CenterX + RadiusInPixels);
-	int32 MinY = FMath::Max(0, CenterY - RadiusInPixels);
-	int32 MaxY = FMath::Min(Resolution - 1, CenterY + RadiusInPixels);
-
-	for (int32 Y = MinY; Y <= MaxY; Y++)
-	{
-		for (int32 X = MinX; X <= MaxX; X++)
-		{
-			float WorldX = -HalfSize + X * Step;
-			float WorldY = -HalfSize + Y * Step;
-			float DistSq = FVector2D::DistSquared(FVector2D(WorldX, WorldY), FVector2D(LocalPos.X, LocalPos.Y));
-			if (DistSq > Radius * Radius) continue;
-
-			float Dist = FMath::Sqrt(DistSq);
-			float Falloff = 1.0f - (Dist / Radius);
-			Falloff = Falloff * Falloff * (3.0f - 2.0f * Falloff);
-
-			int32 Idx = Y * Resolution + X;
-			CombinedHeightBuffer[Idx] = FMath::Lerp(CombinedHeightBuffer[Idx], FlattenHeightNorm, Strength * Falloff);
-		}
-	}
-}
-
 static void ApplyPaintCPUInternal(TArray<float>& WeightBuffer, int32 Resolution, float WorldSize, FVector LocalPos, float Radius, float Strength)
 {
 	float HalfSize = WorldSize * 0.5f;
@@ -570,9 +427,11 @@ class FTerraDyneChunkMeshBuildTask : public FNonAbandonableTask
 {
 	friend class FAutoDeleteAsyncTask<FTerraDyneChunkMeshBuildTask>;
 
-	FIntPoint ChunkCoordinate;
-	UWorld* WorldPtr;
+	// 完成结果只交回启动构建的同一 Actor，防止区域重建或同坐标替换后误投递。
+	TWeakObjectPtr<ATerraDyneChunk> TargetChunk;
 	TArray<float> HeightSnapshot;
+	/** Cooker 法线由原始法线和跨块雕刻梯度共同决定，只传纯数值。 */
+	TArray<FVector3f> NormalSnapshot;
 	int32 Resolution = 0;
 	float WorldSize = 0.0f;
 	float ZScale = 0.0f;
@@ -580,18 +439,19 @@ class FTerraDyneChunkMeshBuildTask : public FNonAbandonableTask
 	bool bCanReuseTopology = false;
 
 public:
+	/** 快照原始高度和已匹配的法线，不在工作线程访问 UObject。 */
 	FTerraDyneChunkMeshBuildTask(
-		FIntPoint InChunkCoordinate,
-		UWorld* InWorldPtr,
+		ATerraDyneChunk* InTargetChunk,
 		TArray<float>&& InHeightSnapshot,
+		TArray<FVector3f>&& InNormals,
 		int32 InResolution,
 		float InWorldSize,
 		float InZScale,
 		int32 InBuildSerial,
 		bool bInCanReuseTopology)
-		: ChunkCoordinate(InChunkCoordinate)
-		, WorldPtr(InWorldPtr)
+		: TargetChunk(InTargetChunk)
 		, HeightSnapshot(MoveTemp(InHeightSnapshot))
+		, NormalSnapshot(MoveTemp(InNormals))
 		, Resolution(InResolution)
 		, WorldSize(InWorldSize)
 		, ZScale(InZScale)
@@ -600,41 +460,30 @@ public:
 	{
 	}
 
+	/** 后台计算网格，原地形法线由调用方提供并在游戏线程安装。 */
 	void DoWork()
 	{
 		TArray<FVector3d> VertexPositions;
 		TArray<FVector3f> VertexNormals;
 		::BuildTerrainSurfaceSamples(HeightSnapshot, Resolution, WorldSize, ZScale, VertexPositions, VertexNormals);
+		if (NormalSnapshot.Num() == VertexNormals.Num()) VertexNormals = MoveTemp(NormalSnapshot);
 
-		FIntPoint CapturedCoord = ChunkCoordinate;
-		UWorld* CapturedWorld = WorldPtr;
+		const TWeakObjectPtr<ATerraDyneChunk> CapturedChunk = TargetChunk;
 		const int32 CapturedBuildSerial = BuildSerial;
 		const bool bCapturedCanReuseTopology = bCanReuseTopology;
 		AsyncTask(ENamedThreads::GameThread,
-			[CapturedCoord,
-			 CapturedWorld,
+			[CapturedChunk,
 			 CapturedBuildSerial,
 			 bCapturedCanReuseTopology,
 			 CapturedPositions = MoveTemp(VertexPositions),
 			 CapturedNormals = MoveTemp(VertexNormals)]() mutable
 			{
-				if (IsValid(CapturedWorld))
-				{
-					if (UTerraDyneSubsystem* Subsystem = CapturedWorld->GetSubsystem<UTerraDyneSubsystem>())
-					{
-						if (ATerraDyneManager* Manager = Subsystem->GetTerrainManager())
-						{
-							if (ATerraDyneChunk* Chunk = Manager->GetChunkAtCoord(CapturedCoord))
-							{
-								Chunk->ReceiveAsyncMeshBuildResult(
-									CapturedBuildSerial,
-									bCapturedCanReuseTopology,
-									MoveTemp(CapturedPositions),
-									MoveTemp(CapturedNormals));
-							}
-						}
-					}
-				}
+                // 仅在游戏线程解引用弱 Actor；销毁后的结果直接丢弃。
+                if (ATerraDyneChunk* Chunk = CapturedChunk.Get())
+                {
+                    Chunk->ReceiveAsyncMeshBuildResult(CapturedBuildSerial, bCapturedCanReuseTopology,
+                        MoveTemp(CapturedPositions), MoveTemp(CapturedNormals));
+                }
 			});
 	}
 
@@ -644,7 +493,9 @@ public:
 	}
 };
 
-ATerraDyneChunk::ATerraDyneChunk()
+// 允许调用方替换默认网格组件，异步网格和碰撞算法保持共用。
+ATerraDyneChunk::ATerraDyneChunk(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
@@ -677,11 +528,7 @@ ATerraDyneChunk::ATerraDyneChunk()
 	WorldSize = 10000.0f;
 	Resolution = 128; // Increased from 64 for better visual quality
 	bInitialized = false;
-	bUseGPU = false;
-	bHeightRTReadbackIsVerticallyFlipped = false;
-	bSkipHeightRenderTargetUploadOnNextMeshRebuild = false;
 	HeightRT = nullptr;
-	HeightRT_Swap = nullptr;
 	HeightUploadTexture = nullptr;
 	CollisionDebounceTimer = 0.0f;
 	bCollisionDirty = false;
@@ -810,23 +657,8 @@ void ATerraDyneChunk::InitializeChunk(FIntPoint Coord, float Size, int32 InRes, 
 		WeightBuffers[L].SetNumZeroed(NumVerts);
 	}
 
-	// Rendering resources are client/listen-server only. Dedicated servers retain the CPU arrays
-	// and DynamicMesh collision but never allocate textures or render targets.
-	if (FApp::CanEverRender() && !IsRunningDedicatedServer())
-	{
-		const FName WeightTextureName = MakeUniqueObjectName(
-			GetTransientPackage(),
-			UTexture2D::StaticClass(),
-			TEXT("TerraDyneWeightTexture"));
-		WeightTexture = UTexture2D::CreateTransient(Resolution, Resolution, PF_B8G8R8A8, WeightTextureName);
-		if (WeightTexture)
-		{
-			WeightTexture->NeverStream = true;
-			WeightTexture->Filter = TF_Bilinear;
-			WeightTexture->UpdateResource();
-		}
-		UploadWeightTexture();
-	}
+	SetupWeightDisplayResources();
+	UploadWeightTexture();
 
 	bool bGenerateNoise = true;
 	if (UTerraDyneSubsystem* Subsystem = GetWorld() ? GetWorld()->GetSubsystem<UTerraDyneSubsystem>() : nullptr)
@@ -871,7 +703,7 @@ void ATerraDyneChunk::InitializeChunk(FIntPoint Coord, float Size, int32 InRes, 
 		HeightBuffer[i] = FMath::Clamp(BaseBuffer[i] + DetailBuffer[i], 0.0f, 1.0f);
 	}
 	
-	SetupGPU();
+	SetupHeightDisplayResources();
 	RequestedMeshBuildSerial++;
 	bMeshDirty = true;
 	bCollisionDirty = true;
@@ -883,80 +715,36 @@ void ATerraDyneChunk::InitializeChunk(FIntPoint Coord, float Size, int32 InRes, 
 		GridCoordinate.X, GridCoordinate.Y, bUseGPU ? TEXT("YES") : TEXT("NO"));
 }
 
-bool ATerraDyneChunk::SetupGPU()
+/** 建立线性权重纹理；专用服务器保留 CPU 高度与碰撞，不创建渲染资源。 */
+void ATerraDyneChunk::SetupWeightDisplayResources()
 {
-	const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>();
-	if (!FApp::CanEverRender() || IsRunningDedicatedServer() || (Settings && !Settings->bEnableGPUBrushes))
-	{
-		bUseGPU = false;
-		return false;
-	}
+	if (!FApp::CanEverRender() || IsRunningDedicatedServer()) return;
+	const FName TextureName = MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(), TEXT("TerraDyneWeightTexture"));
+	WeightTexture = UTexture2D::CreateTransient(Resolution, Resolution, PF_B8G8R8A8, TextureName);
+	check(WeightTexture);
+	WeightTexture->NeverStream = true;
+	WeightTexture->SRGB = false;
+	WeightTexture->AddressX = TA_Clamp;
+	WeightTexture->AddressY = TA_Clamp;
+	WeightTexture->Filter = TF_Bilinear;
+	WeightTexture->UpdateResource();
+}
 
-	// Create ping-pong render targets
-	HeightRT = NewObject<UTextureRenderTarget2D>(this);
-	HeightRT->bCanCreateUAV = true;
-	HeightRT->InitCustomFormat(Resolution, Resolution, PF_FloatRGBA, false);
-	HeightRT->UpdateResourceImmediate(true);
-
-	HeightRT_Swap = NewObject<UTextureRenderTarget2D>(this);
-	HeightRT_Swap->bCanCreateUAV = true;
-	HeightRT_Swap->InitCustomFormat(Resolution, Resolution, PF_FloatRGBA, false);
-	HeightRT_Swap->UpdateResourceImmediate(true);
-
-	const FName HeightUploadTextureName = MakeUniqueObjectName(
-		GetTransientPackage(),
-		UTexture2D::StaticClass(),
-		TEXT("TerraDyneHeightUploadTexture"));
-	HeightUploadTexture = UTexture2D::CreateTransient(Resolution, Resolution, PF_FloatRGBA, HeightUploadTextureName);
-	if (!HeightUploadTexture)
-	{
-		UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: Height upload texture unavailable — GPU disabled"), GridCoordinate.X, GridCoordinate.Y);
-		bUseGPU = false;
-		return false;
-	}
-
-	HeightUploadTexture->NeverStream = true;
-	HeightUploadTexture->SRGB = false;
-	HeightUploadTexture->Filter = TF_Nearest;
-	HeightUploadTexture->UpdateResource();
-
-	// Upload CPU height data to HeightRT and wait for completion
-	UpdateRenderTargetFromHeightmap();
-	FlushRenderingCommands();
-
-	// Validate: readback should match the uploaded data within tolerance
-	FTextureRenderTargetResource* RTResource = HeightRT->GameThread_GetRenderTargetResource();
-	if (!RTResource)
-	{
-		UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: RT resource unavailable — GPU disabled"), GridCoordinate.X, GridCoordinate.Y);
-		bUseGPU = false;
-		return false;
-	}
-
-	TArray<float> Readback;
-	if (!ReadFloatHeightRenderTarget(RTResource, Readback) || Readback.Num() != HeightBuffer.Num())
-	{
-		UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: RT readback size mismatch — GPU disabled"), GridCoordinate.X, GridCoordinate.Y);
-		bUseGPU = false;
-		return false;
-	}
-
-	// Spot-check a few samples to verify data integrity
-	const float DirectError = ComputeHeightReadbackError(Readback, HeightBuffer, Resolution, false);
-	const float VerticalFlipError = ComputeHeightReadbackError(Readback, HeightBuffer, Resolution, true);
-	bHeightRTReadbackIsVerticallyFlipped = VerticalFlipError < DirectError;
-	const float MaxError = bHeightRTReadbackIsVerticallyFlipped ? VerticalFlipError : DirectError;
-
-	if (MaxError > 0.01f)
-	{
-		UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: RT validation failed (max error %.4f) — GPU disabled"),
-			GridCoordinate.X, GridCoordinate.Y, MaxError);
-		bUseGPU = false;
-		return false;
-	}
-
-	bUseGPU = true;
-	return true;
+// CPU 高度是唯一权威；渲染目标仅供材质读取，不做计算或同步回读。
+void ATerraDyneChunk::SetupHeightDisplayResources()
+{
+    if (!FApp::CanEverRender() || IsRunningDedicatedServer()) return;
+    HeightRT = NewObject<UTextureRenderTarget2D>(this);
+    HeightRT->InitCustomFormat(Resolution, Resolution, PF_FloatRGBA, false);
+    HeightRT->UpdateResourceImmediate(true);
+    const FName TextureName = MakeUniqueObjectName(GetTransientPackage(), UTexture2D::StaticClass(), TEXT("TerraDyneHeightUploadTexture"));
+    HeightUploadTexture = UTexture2D::CreateTransient(Resolution, Resolution, PF_FloatRGBA, TextureName);
+    check(HeightUploadTexture);
+    HeightUploadTexture->NeverStream = true;
+    HeightUploadTexture->SRGB = false;
+    HeightUploadTexture->Filter = TF_Nearest;
+    HeightUploadTexture->UpdateResource();
+    UpdateRenderTargetFromHeightmap();
 }
 
 void ATerraDyneChunk::UpdateRenderTargetFromHeightmap()
@@ -1013,6 +801,7 @@ void ATerraDyneChunk::UpdateRenderTargetFromHeightmap()
 	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, Context);
 }
 
+/** 切换材质时采用调用方的源权重图；普通插件块仍绑定自身可编辑权重。 */
 void ATerraDyneChunk::SetMaterial(UMaterialInterface* InMaterial)
 {
 	if (!DynamicMeshComp) return;
@@ -1020,7 +809,7 @@ void ATerraDyneChunk::SetMaterial(UMaterialInterface* InMaterial)
 
 	if (!HeightRT && HeightBuffer.Num() == Resolution * Resolution)
 	{
-		SetupGPU();
+		SetupHeightDisplayResources();
 	}
 	
 	if (InMaterial)
@@ -1028,7 +817,7 @@ void ATerraDyneChunk::SetMaterial(UMaterialInterface* InMaterial)
 		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(InMaterial, this);
 		if (MID)
 		{
-			ApplyTerrainMaterialParameters(MID, HeightRT, WeightTexture, WorldSize, ZScale, Resolution);
+			ApplyTerrainMaterialParameters(MID, HeightRT, SurfaceWeightTexture ? SurfaceWeightTexture.Get() : WeightTexture.Get(), WorldSize, ZScale, Resolution);
 			DynamicMeshComp->SetMaterial(0, MID);
 		}
 	}
@@ -1043,6 +832,7 @@ void ATerraDyneChunk::SetMaterial(UMaterialInterface* InMaterial)
 	}
 }
 
+/** 高度或岸遮罩更新不得覆盖 Cooker 已选择的原始图层权重。 */
 void ATerraDyneChunk::UpdateDisplayMaterialParameters()
 {
 	if (!DynamicMeshComp)
@@ -1052,10 +842,11 @@ void ATerraDyneChunk::UpdateDisplayMaterialParameters()
 
 	if (UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(DynamicMeshComp->GetMaterial(0)))
 	{
-		ApplyTerrainMaterialParameters(MID, HeightRT, WeightTexture, WorldSize, ZScale, Resolution);
+		ApplyTerrainMaterialParameters(MID, HeightRT, SurfaceWeightTexture ? SurfaceWeightTexture.Get() : WeightTexture.Get(), WorldSize, ZScale, Resolution);
 	}
 }
 
+/** 把高度和外部源法线同时冻结，后台构建不再读取正在变化的 Actor 数据。 */
 void ATerraDyneChunk::StartAsyncMeshBuild()
 {
 	if (bMeshBuildInFlight || Resolution < 2)
@@ -1076,9 +867,9 @@ void ATerraDyneChunk::StartAsyncMeshBuild()
 	InFlightMeshBuildSerial = RequestedMeshBuildSerial;
 
 	(new FAutoDeleteAsyncTask<FTerraDyneChunkMeshBuildTask>(
-		GridCoordinate,
-		GetWorld(),
+		this,
 		TArray<float>(HeightBuffer),
+		TArray<FVector3f>(SurfaceNormals),
 		Resolution,
 		WorldSize,
 		ZScale,
@@ -1140,11 +931,10 @@ void ATerraDyneChunk::ApplyPendingMeshBuild()
 		InitializeTerrainMeshTopology(PendingMeshVertexPositions, PendingMeshVertexNormals);
 	}
 
-	if (HeightRT && !bSkipHeightRenderTargetUploadOnNextMeshRebuild)
+	if (HeightRT)
 	{
 		UpdateRenderTargetFromHeightmap();
 	}
-	bSkipHeightRenderTargetUploadOnNextMeshRebuild = false;
 
 	UpdateDisplayMaterialParameters();
 
@@ -1154,6 +944,7 @@ void ATerraDyneChunk::ApplyPendingMeshBuild()
 	bMeshDirty = false;
 }
 
+/** 把线性 RGBA 权重上传为 BGRA 纹理，不改变层编号或存档格式。 */
 void ATerraDyneChunk::UploadWeightTexture()
 {
 	if (!WeightTexture) return;
@@ -1180,9 +971,10 @@ void ATerraDyneChunk::UploadWeightTexture()
 
 	for (int32 i = 0; i < NumPixels; i++)
 	{
-		Pixels[i * 4 + 0] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[0][i] * 255.f), 0, 255); // R
+		// PF_B8G8R8A8 必须按 BGRA 写入，源数组与保存数据仍保持 RGBA。
+		Pixels[i * 4 + 0] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[2][i] * 255.f), 0, 255); // B
 		Pixels[i * 4 + 1] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[1][i] * 255.f), 0, 255); // G
-		Pixels[i * 4 + 2] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[2][i] * 255.f), 0, 255); // B
+		Pixels[i * 4 + 2] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[0][i] * 255.f), 0, 255); // R
 		Pixels[i * 4 + 3] = (uint8)FMath::Clamp(FMath::RoundToInt(WeightBuffers[3][i] * 255.f), 0, 255); // A
 	}
 
@@ -1225,65 +1017,55 @@ void ATerraDyneChunk::ApplyLocalIdempotentEdit(
 		GridCoordinate.X, GridCoordinate.Y, (int32)BrushMode, *RelativePos.ToString(), Radius, Strength);
 
 	bool bModifiedHeight = false;
-	bool bHeightUpdatedByGPU = false;
 
 	TargetLayer = NormalizeEditableLayer(TargetLayer);
 	TArray<float>* TargetBuffer = ResolveEditableHeightBuffer(TargetLayer, BaseBuffer, SculptBuffer, DetailBuffer);
 
-	if (BrushMode != ETerraDyneBrushMode::Paint && bUseGPU)
+	switch (BrushMode)
 	{
-		bHeightUpdatedByGPU = ApplyBrushGPU(RelativePos, Radius, Strength, BrushMode, TargetLayer, FlattenHeight);
-		bModifiedHeight = bHeightUpdatedByGPU;
+	case ETerraDyneBrushMode::Raise:
+		ApplyBrushCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, FMath::Abs(Strength), ZScale);
+		bModifiedHeight = true;
+		break;
+
+	case ETerraDyneBrushMode::Lower:
+		ApplyBrushCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, -FMath::Abs(Strength), ZScale);
+		bModifiedHeight = true;
+		break;
+
+	case ETerraDyneBrushMode::Smooth:
+		ApplySmoothCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, FMath::Clamp(Strength / ZScale, 0.f, 1.f), SmoothScratchBuffer);
+		bModifiedHeight = true;
+		break;
+
+	case ETerraDyneBrushMode::Flatten:
+		ApplyFlattenCPUInternal(BaseBuffer, SculptBuffer, DetailBuffer, TargetLayer, Resolution, WorldSize,
+			RelativePos, Radius, FMath::Clamp(Strength / ZScale, 0.f, 1.f),
+			FlattenHeight / ZScale);
+		bModifiedHeight = true;
+		break;
+
+	case ETerraDyneBrushMode::Paint:
+	{
+		int32 LayerIdx = FMath::Clamp(WeightLayerIndex, 0, NumWeightLayers - 1);
+		// Paint strength: UI slider maps [0,5] * 2500 = [0, 12500]. Use 10000 as "full opacity" divisor
+		// so mid-slider (~0.5 * 2500 = 1250) gives ~0.125 opacity per stroke — suitable for layered painting.
+		ApplyPaintCPUInternal(WeightBuffers[LayerIdx], Resolution, WorldSize, RelativePos, Radius,
+			FMath::Clamp(Strength / 10000.f, 0.f, 1.f));
+		UploadWeightTexture();
+		bGrassDirty = true;
+		float GrassDelay = 0.5f;
+		if (const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>())
+		{
+			GrassDelay = Settings->GrassDebounceTime;
+		}
+		GrassDebounceTimer = GrassDelay;
+		break;
 	}
-
-	if (!bModifiedHeight)
-	{
-		switch (BrushMode)
-		{
-		case ETerraDyneBrushMode::Raise:
-			ApplyBrushCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, FMath::Abs(Strength), ZScale);
-			bModifiedHeight = true;
-			break;
-
-		case ETerraDyneBrushMode::Lower:
-			ApplyBrushCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, -FMath::Abs(Strength), ZScale);
-			bModifiedHeight = true;
-			break;
-
-		case ETerraDyneBrushMode::Smooth:
-			ApplySmoothCPUInternal(*TargetBuffer, Resolution, WorldSize, RelativePos, Radius, FMath::Clamp(Strength / ZScale, 0.f, 1.f), SmoothScratchBuffer);
-			bModifiedHeight = true;
-			break;
-
-		case ETerraDyneBrushMode::Flatten:
-			ApplyFlattenCPUInternal(BaseBuffer, SculptBuffer, DetailBuffer, TargetLayer, Resolution, WorldSize,
-				RelativePos, Radius, FMath::Clamp(Strength / ZScale, 0.f, 1.f),
-				FlattenHeight / ZScale);
-			bModifiedHeight = true;
-			break;
-
-		case ETerraDyneBrushMode::Paint:
-		{
-			int32 LayerIdx = FMath::Clamp(WeightLayerIndex, 0, NumWeightLayers - 1);
-			// Paint strength: UI slider maps [0,5] * 2500 = [0, 12500]. Use 10000 as "full opacity" divisor
-			// so mid-slider (~0.5 * 2500 = 1250) gives ~0.125 opacity per stroke — suitable for layered painting.
-			ApplyPaintCPUInternal(WeightBuffers[LayerIdx], Resolution, WorldSize, RelativePos, Radius,
-				FMath::Clamp(Strength / 10000.f, 0.f, 1.f));
-			UploadWeightTexture();
-			bGrassDirty = true;
-			float GrassDelay = 0.5f;
-			if (const UTerraDyneSettings* Settings = GetDefault<UTerraDyneSettings>())
-			{
-				GrassDelay = Settings->GrassDebounceTime;
-			}
-			GrassDebounceTimer = GrassDelay;
-			break;
-		}
-		default:
-			UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: Unknown BrushMode %d — no-op"),
-				GridCoordinate.X, GridCoordinate.Y, (int32)BrushMode);
-			break;
-		}
+	default:
+		UE_LOG(LogTerraDyne, Warning, TEXT("Chunk [%d,%d]: Unknown BrushMode %d — no-op"),
+			GridCoordinate.X, GridCoordinate.Y, (int32)BrushMode);
+		break;
 	}
 
 	if (bModifiedHeight)
@@ -1294,10 +1076,6 @@ void ATerraDyneChunk::ApplyLocalIdempotentEdit(
 			SculptBuffer[i] = ClampEditableLayerValue(SculptBuffer[i], ETerraDyneLayer::Sculpt);
 			DetailBuffer[i] = ClampEditableLayerValue(DetailBuffer[i], ETerraDyneLayer::Detail);
 			HeightBuffer[i] = FMath::Clamp(BaseBuffer[i] + SculptBuffer[i] + DetailBuffer[i], 0.f, 1.f);
-		}
-		if (!bHeightUpdatedByGPU)
-		{
-			bSkipHeightRenderTargetUploadOnNextMeshRebuild = false;
 		}
 		RequestedMeshBuildSerial++;
 		bMeshDirty = true;
@@ -1321,84 +1099,6 @@ void ATerraDyneChunk::ApplyLocalIdempotentEdit(
 			TransferredFoliageDebounceTimer = GrassDelay;
 		}
 	}
-}
-
-bool ATerraDyneChunk::ApplyBrushGPU(
-	FVector LocalPos,
-	float Radius,
-	float Strength,
-	ETerraDyneBrushMode BrushMode,
-	ETerraDyneLayer TargetLayer,
-	float FlattenHeight)
-{
-	if (!HeightRT || !HeightRT_Swap || Resolution < 2)
-	{
-		return false;
-	}
-
-	float HalfSize = WorldSize * 0.5f;
-	float U = FMath::Clamp((LocalPos.X + HalfSize) / WorldSize, 0.0f, 1.0f);
-	float V = FMath::Clamp((LocalPos.Y + HalfSize) / WorldSize, 0.0f, 1.0f);
-	float UVRadius = Radius / WorldSize;
-	const float NormalizedStrength = FMath::Abs(Strength) / FMath::Max(ZScale, KINDA_SMALL_NUMBER);
-
-	FTerraDyneSimulationBrushParams BrushParams;
-	BrushParams.BrushCenterUV = FVector2f(U, V);
-	BrushParams.BrushRadiusUV = UVRadius;
-	BrushParams.BrushStrengthNormalized = NormalizedStrength;
-	BrushParams.FlattenHeightNormalized = FlattenHeight / FMath::Max(ZScale, KINDA_SMALL_NUMBER);
-	BrushParams.Resolution = Resolution;
-	BrushParams.BrushMode = BrushMode;
-	// TODO: Pass actual DeltaTime for time-dependent simulations
-	if (!DispatchTerraDyneBrushSimulation(HeightRT, HeightRT_Swap, BrushParams))
-	{
-		return false;
-	}
-
-	// Swap: HeightRT_Swap (just written) becomes the new current HeightRT
-	Swap(HeightRT, HeightRT_Swap);
-
-	if (HeightBuffer.Num() != BaseBuffer.Num() ||
-		HeightBuffer.Num() != SculptBuffer.Num() ||
-		HeightBuffer.Num() != DetailBuffer.Num())
-	{
-		return false;
-	}
-
-	switch (BrushMode)
-	{
-	case ETerraDyneBrushMode::Raise:
-		ApplyBrushCPUInternal(HeightBuffer, Resolution, WorldSize, LocalPos, Radius, FMath::Abs(Strength), ZScale);
-		break;
-	case ETerraDyneBrushMode::Lower:
-		ApplyBrushCPUInternal(HeightBuffer, Resolution, WorldSize, LocalPos, Radius, -FMath::Abs(Strength), ZScale);
-		break;
-		case ETerraDyneBrushMode::Smooth:
-			ApplySmoothCPUInternal(HeightBuffer, Resolution, WorldSize, LocalPos, Radius, FMath::Clamp(Strength / ZScale, 0.f, 1.f), SmoothScratchBuffer);
-			break;
-	case ETerraDyneBrushMode::Flatten:
-		ApplyFlattenToCombinedHeightCPUInternal(
-			HeightBuffer,
-			Resolution,
-			WorldSize,
-			LocalPos,
-			Radius,
-			FMath::Clamp(FMath::Abs(Strength) / FMath::Max(ZScale, KINDA_SMALL_NUMBER), 0.f, 1.f),
-			FlattenHeight / FMath::Max(ZScale, KINDA_SMALL_NUMBER));
-		break;
-	default:
-		return false;
-	}
-
-	for (float& HeightSample : HeightBuffer)
-	{
-		HeightSample = FMath::Clamp(HeightSample, 0.0f, 1.0f);
-	}
-
-	RebuildEditedLayerFromCombinedHeight(TargetLayer, BaseBuffer, SculptBuffer, DetailBuffer, HeightBuffer);
-	bSkipHeightRenderTargetUploadOnNextMeshRebuild = true;
-	UpdateDisplayMaterialParameters();
-	return true;
 }
 
 bool ATerraDyneChunk::HasTerrainMeshTopology() const
@@ -1433,8 +1133,10 @@ void ATerraDyneChunk::BuildTerrainSurfaceSamples(
 	TArray<FVector3f>& OutVertexNormals) const
 {
 	::BuildTerrainSurfaceSamples(HeightBuffer, Resolution, WorldSize, ZScale, OutVertexPositions, OutVertexNormals);
+	if (SurfaceNormals.Num() == OutVertexNormals.Num()) OutVertexNormals = SurfaceNormals;
 }
 
+/** UV0 保留源纹理，UV1 保留源权重，UV2 承载独立岸色；切线基与 Landscape 相同。 */
 void ATerraDyneChunk::InitializeTerrainMeshTopology(
 	const TArray<FVector3d>& VertexPositions,
 	const TArray<FVector3f>& VertexNormals)
@@ -1448,9 +1150,16 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 	{
 		Mesh.Clear();
 		Mesh.EnableAttributes();
+		// 权重图独立使用 0..1 坐标，不跟随地表纹理重复。
+		Mesh.Attributes()->SetNumUVLayers(3);
+		Mesh.Attributes()->EnableTangents();
 
 		UE::Geometry::FDynamicMeshUVOverlay* UVOverlay = Mesh.Attributes()->PrimaryUV();
+		UE::Geometry::FDynamicMeshUVOverlay* WeightUVOverlay = Mesh.Attributes()->GetUVLayer(1);
+		UE::Geometry::FDynamicMeshUVOverlay* ShoreUVOverlay = Mesh.Attributes()->GetUVLayer(2);
 		UE::Geometry::FDynamicMeshNormalOverlay* NormalOverlay = Mesh.Attributes()->PrimaryNormals();
+		UE::Geometry::FDynamicMeshNormalOverlay* TangentOverlay = Mesh.Attributes()->PrimaryTangents();
+		UE::Geometry::FDynamicMeshNormalOverlay* BitangentOverlay = Mesh.Attributes()->PrimaryBiTangents();
 		const float UVTileScale = WorldSize / 1000.0f;
 
 		for (int32 Y = 0; Y < Resolution; ++Y)
@@ -1462,8 +1171,16 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 
 				const float U = (static_cast<float>(X) / static_cast<float>(Resolution - 1)) * UVTileScale;
 				const float V = (static_cast<float>(Y) / static_cast<float>(Resolution - 1)) * UVTileScale;
-				UVOverlay->AppendElement(FVector2f(U, V));
+				UVOverlay->AppendElement(FVector2f(FVector2D(U, V) * SurfaceUVScale + SurfaceUVOffset));
+				const int32 WeightResolution = SurfaceWeightResolution > 0 ? SurfaceWeightResolution : Resolution;
+				WeightUVOverlay->AppendElement(FVector2f((float(X)/(Resolution-1)*(WeightResolution-1)+.5f)/WeightResolution,
+					(float(Y)/(Resolution-1)*(WeightResolution-1)+.5f)/WeightResolution));
+				ShoreUVOverlay->AppendElement(FVector2f((float(X)+.5f)/Resolution, (float(Y)+.5f)/Resolution));
 				NormalOverlay->AppendElement(VertexNormals[Index]);
+                // 与 LandscapeVertexFactory 的切线基一致，不能让动态网格使用空切线。
+                const FVector3f N = VertexNormals[Index];
+                const FVector3f T = FVector3f(N.Z,0,-N.X).GetSafeNormal();
+                TangentOverlay->AppendElement(T); BitangentOverlay->AppendElement(FVector3f::CrossProduct(N,T));
 			}
 		}
 
@@ -1476,19 +1193,26 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 				const int32 TL = (Y + 1) * Resolution + X;
 				const int32 TR = TL + 1;
 
-				const int32 T0 = Mesh.AppendTriangle(BL, TR, BR);
-				const int32 T1 = Mesh.AppendTriangle(BL, TL, TR);
+				// 沿源 Landscape 的反对角线细分，保留原始三角平面。
+				const int32 T0 = Mesh.AppendTriangle(BL, TL, BR);
+				const int32 T1 = Mesh.AppendTriangle(BR, TL, TR);
 				if (T0 >= 0)
 				{
-					const UE::Geometry::FIndex3i TriElements(BL, TR, BR);
+					const UE::Geometry::FIndex3i TriElements(BL, TL, BR);
 					UVOverlay->SetTriangle(T0, TriElements);
+					WeightUVOverlay->SetTriangle(T0, TriElements);
+					ShoreUVOverlay->SetTriangle(T0, TriElements);
 					NormalOverlay->SetTriangle(T0, TriElements);
+					TangentOverlay->SetTriangle(T0, TriElements); BitangentOverlay->SetTriangle(T0, TriElements);
 				}
 				if (T1 >= 0)
 				{
-					const UE::Geometry::FIndex3i TriElements(BL, TL, TR);
+					const UE::Geometry::FIndex3i TriElements(BR, TL, TR);
 					UVOverlay->SetTriangle(T1, TriElements);
+					WeightUVOverlay->SetTriangle(T1, TriElements);
+					ShoreUVOverlay->SetTriangle(T1, TriElements);
 					NormalOverlay->SetTriangle(T1, TriElements);
+					TangentOverlay->SetTriangle(T1, TriElements); BitangentOverlay->SetTriangle(T1, TriElements);
 				}
 			}
 		}
@@ -1499,6 +1223,7 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 	EDynamicMeshAttributeChangeFlags::NormalsTangents);
 }
 
+/** 修改高度时同步更新法线和切线，不能沿用挖掘前的光照基。 */
 void ATerraDyneChunk::UpdateTerrainMeshSurface(
 	const TArray<FVector3d>& VertexPositions,
 	const TArray<FVector3f>& VertexNormals)
@@ -1523,6 +1248,9 @@ void ATerraDyneChunk::UpdateTerrainMeshSurface(
 			if (NormalOverlay && NormalOverlay->IsElement(Index))
 			{
 				NormalOverlay->SetElement(Index, VertexNormals[Index]);
+                const FVector3f N=VertexNormals[Index], T=FVector3f(N.Z,0,-N.X).GetSafeNormal();
+                Mesh.Attributes()->PrimaryTangents()->SetElement(Index,T);
+                Mesh.Attributes()->PrimaryBiTangents()->SetElement(Index,FVector3f::CrossProduct(N,T));
 			}
 		}
 	},
@@ -1561,11 +1289,10 @@ void ATerraDyneChunk::RebuildMesh()
 		InitializeTerrainMeshTopology(VertexPositions, VertexNormals);
 	}
 
-	if (HeightRT && !bSkipHeightRenderTargetUploadOnNextMeshRebuild)
+	if (HeightRT)
 	{
 		UpdateRenderTargetFromHeightmap();
 	}
-	bSkipHeightRenderTargetUploadOnNextMeshRebuild = false;
 
 	UpdateDisplayMaterialParameters();
 }
@@ -1800,6 +1527,7 @@ FTerraDyneChunkData ATerraDyneChunk::GetSerializedData() const
 	return Data;
 }
 
+/** 恢复高度与权重，并完成显示初始化；延迟 Spawn 的 BeginPlay 不再清空已加载高度。 */
 void ATerraDyneChunk::LoadFromData(const FTerraDyneChunkData& Data)
 {
 	int32 LoadResolution = Data.Resolution;
@@ -1874,7 +1602,15 @@ void ATerraDyneChunk::LoadFromData(const FTerraDyneChunkData& Data)
 			WeightBuffers[3][i] = Data.WeightData[i * 4 + 3] / 255.f;
 		}
 	}
+	if (!bInitialized)
+	{
+		SetupWeightDisplayResources();
+		SetupHeightDisplayResources();
+		bInitialized = true;
+	}
 	UploadWeightTexture();
+	UpdateRenderTargetFromHeightmap();
+	UpdateDisplayMaterialParameters();
 
 	RequestedMeshBuildSerial++;
 	bMeshDirty = true;

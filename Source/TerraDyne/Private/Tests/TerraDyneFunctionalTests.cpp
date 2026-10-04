@@ -101,9 +101,9 @@ bool FTerraDyneDeformationTest::RunTest(const FString& Parameters)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneGPUBrushStateSyncTest, "TerraDyne.Functional.GPUBrushStateSync", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerraDyneCPUBrushStateSyncTest, "TerraDyne.Functional.CPUBrushStateSync", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FTerraDyneGPUBrushStateSyncTest::RunTest(const FString& Parameters)
+bool FTerraDyneCPUBrushStateSyncTest::RunTest(const FString& Parameters)
 {
     UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
     TestNotNull("World should exist", World);
@@ -117,7 +117,7 @@ bool FTerraDyneGPUBrushStateSyncTest::RunTest(const FString& Parameters)
     Chunk->ChunkSizeWorldUnits = 2048.0f;
     Chunk->WorldSize = 2048.0f;
     Chunk->ZScale = 768.0f;
-    Chunk->Initialize(32, 2048.0f);
+    Chunk->InitializeChunk(FIntPoint::ZeroValue, 2048.0f, 32, nullptr);
 
     const bool bRenderResourcesExpected = FApp::CanEverRender() && !IsRunningDedicatedServer();
     if (bRenderResourcesExpected)
@@ -138,20 +138,15 @@ bool FTerraDyneGPUBrushStateSyncTest::RunTest(const FString& Parameters)
     Chunk->ApplyLocalIdempotentEdit(EditPos, 300.0f, 500.0f, ETerraDyneBrushMode::Raise);
 
     const float UpdatedHeight = Chunk->GetHeightAtLocation(EditPos);
-    TestTrue("GPU brush should update CPU height queries immediately", !FMath::IsNearlyEqual(InitialHeight, UpdatedHeight));
-    TestTrue("GPU brush should update the CPU height buffer immediately",
+    TestTrue("CPU brush should update CPU height queries immediately", !FMath::IsNearlyEqual(InitialHeight, UpdatedHeight));
+    TestTrue("CPU brush should update the CPU height buffer immediately",
         Chunk->HeightBuffer.IsValidIndex(CenterIndex) && !FMath::IsNearlyEqual(InitialSample, Chunk->HeightBuffer[CenterIndex]));
-    if (Chunk->IsUsingGPU())
-    {
-        TestNotEqual("GPU brush should swap the active height RT", Chunk->HeightRT.Get(), PreviousHeightRT);
-    }
-    else
-    {
-        AddInfo(TEXT("GPU terrain path unavailable under the current automation RHI; CPU-authoritative synchronization was validated."));
-    }
+    // CPU 路径必须被显式选中，显示资源不能伪装成 GPU 计算能力。
+    TestFalse("CPU-only adaptation must not advertise GPU brushes", Chunk->IsUsingGPU());
+    TestEqual("CPU edit retains its display target", Chunk->HeightRT.Get(), PreviousHeightRT);
 
     const FTerraDyneChunkData SerializedData = Chunk->GetSerializedData();
-    TestTrue("Serialized height data should match the CPU height buffer after a GPU brush",
+    TestTrue("Serialized height data should match the CPU height buffer after a CPU brush",
         SerializedData.HeightData.IsValidIndex(CenterIndex) &&
         Chunk->HeightBuffer.IsValidIndex(CenterIndex) &&
         FMath::IsNearlyEqual(SerializedData.HeightData[CenterIndex], Chunk->HeightBuffer[CenterIndex], KINDA_SMALL_NUMBER));

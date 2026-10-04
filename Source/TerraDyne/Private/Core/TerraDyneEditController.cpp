@@ -49,9 +49,9 @@ ATerraDyneEditController::ATerraDyneEditController()
 	BrushDecal->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f)); // Project downward
 	BrushDecal->SetVisibility(false);
 
-	// Load brush preview material
+	// 开源包缺少专用笔刷材质，试验显式采用引擎默认 Decal 并保留调试轮廓。
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BrushMatFinder(
-		TEXT("/TerraDyne/Materials/M_TerraDyne_BrushPreview"));
+		TEXT("/Engine/EngineMaterials/DefaultDecalMaterial"));
 	if (BrushMatFinder.Succeeded())
 	{
 		BrushDecal->SetDecalMaterial(BrushMatFinder.Object);

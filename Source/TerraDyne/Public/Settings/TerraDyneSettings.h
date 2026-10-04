@@ -59,10 +59,6 @@ public:
 	int32 MaxCollisionUpdatesPerFrame;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Performance",
-		meta = (ToolTip = "Enable GPU brush resources on render-capable clients. Dedicated servers always use the CPU path."))
-	bool bEnableGPUBrushes;
-
-	UPROPERTY(Config, EditAnywhere, Category = "Performance",
 		meta = (ToolTip = "Seconds to coalesce overlapping navigation dirty areas before submitting them.", ClampMin = "0.0", ClampMax = "10.0"))
 	float NavigationDirtyDebounceTime;
 

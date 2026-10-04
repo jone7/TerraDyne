@@ -2,7 +2,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Core/TerraDyneManager.h"
-#include "Examples/TerraDyneIntegrationExamples.h"
 #include "World/TerraDyneChunk.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/StaticMesh.h"
@@ -267,97 +266,5 @@ bool FTerraDyneGameplayHooksAndProceduralMetadataTest::RunTest(const FString& Pa
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FTerraDyneIntegrationExamplesRuntimeHelpersTest,
-	"TerraDyne.WorldFramework.IntegrationExamplesRuntimeHelpers",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FTerraDyneIntegrationExamplesRuntimeHelpersTest::RunTest(const FString& Parameters)
-{
-	UWorld* World = FAutomationEditorCommonUtils::CreateNewMap();
-	TestNotNull("World", World);
-	if (!World)
-	{
-		return false;
-	}
-
-	ATerraDyneManager* Manager = World->SpawnActor<ATerraDyneManager>();
-	TestNotNull("Manager", Manager);
-	if (!Manager)
-	{
-		return false;
-	}
-
-	Manager->GlobalChunkSize = 1000.0f;
-	Manager->ProceduralWorldSettings.WorldSeed = 7;
-
-	FTerraDyneBiomeOverlay Overlay;
-	Overlay.BiomeTag = TEXT("Forest");
-	Overlay.bApplyToProceduralChunks = true;
-	Overlay.ProceduralNoiseMin = 0.0f;
-	Overlay.ProceduralNoiseMax = 1.0f;
-	Overlay.Priority = 5;
-	Manager->BiomeOverlays.Add(Overlay);
-
-	FTerraDyneAISpawnZone SpawnZone;
-	SpawnZone.ZoneId = TEXT("ForestSpawn");
-	SpawnZone.RequiredBiomeTag = TEXT("Forest");
-	SpawnZone.LocalBounds = FBox(FVector(-250.0f, -250.0f, -200.0f), FVector(250.0f, 250.0f, 500.0f));
-	Manager->AISpawnZones.Add(SpawnZone);
-
-	FTerraDyneBuildPermissionZone BuildZone;
-	BuildZone.ZoneId = TEXT("TownCore");
-	BuildZone.Permission = ETerraDyneBuildPermission::Blocked;
-	BuildZone.Reason = TEXT("Protected settlement footprint");
-	BuildZone.LocalBounds = FBox(FVector(-300.0f, -300.0f, -500.0f), FVector(300.0f, 300.0f, 500.0f));
-	Manager->BuildPermissionZones.Add(BuildZone);
-
-	ATerraDyneChunk* Chunk = World->SpawnActor<ATerraDyneChunk>();
-	TestNotNull("Chunk", Chunk);
-	if (!Chunk)
-	{
-		return false;
-	}
-
-	Chunk->GridCoordinate = FIntPoint::ZeroValue;
-	Chunk->WorldSize = 1000.0f;
-	Chunk->ChunkSizeWorldUnits = 1000.0f;
-	Chunk->Initialize(16, 1000.0f);
-	Manager->RebuildChunkMap();
-
-	ATerraDyneSaveLoadIntegrationExample* SaveLoadExample = World->SpawnActor<ATerraDyneSaveLoadIntegrationExample>();
-	TestNotNull("Save/load example", SaveLoadExample);
-	if (!SaveLoadExample)
-	{
-		return false;
-	}
-
-	SaveLoadExample->TargetManager = Manager;
-	SaveLoadExample->SaveSlotName = FString::Printf(
-		TEXT("TerraDyneExample_%s"),
-		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
-
-	TestFalse("Save slot should not exist before first save", SaveLoadExample->DoesSaveExist());
-	SaveLoadExample->SaveWorldToSlot();
-	ADD_LATENT_AUTOMATION_COMMAND(
-		TerraDyneWorldFrameworkTests::FWaitForSaveThenDeleteCommand(this, SaveLoadExample->SaveSlotName));
-
-	ATerraDyneBiomeReactorIntegrationExample* BiomeReactor = World->SpawnActor<ATerraDyneBiomeReactorIntegrationExample>();
-	TestNotNull("Biome reactor example", BiomeReactor);
-	if (!BiomeReactor)
-	{
-		return false;
-	}
-
-	BiomeReactor->TargetManager = Manager;
-	BiomeReactor->SetActorLocation(FVector::ZeroVector);
-
-	TestTrue("Gameplay context refresh should succeed", BiomeReactor->RefreshGameplayContext());
-	TestEqual("Biome reactor caches biome tag", BiomeReactor->LastBiomeTag, FName(TEXT("Forest")));
-	TestFalse("Biome reactor caches blocked build state", BiomeReactor->bLastCanBuild);
-	TestEqual("Biome reactor caches one AI spawn zone", BiomeReactor->LastAISpawnZones.Num(), 1);
-	TestTrue("Biome reactor caches build reason", !BiomeReactor->LastBuildReason.IsEmpty());
-
-	return true;
-}
+// 上游开源包未提供 Examples；保留上方实际 WorldFramework 检查。
 #endif

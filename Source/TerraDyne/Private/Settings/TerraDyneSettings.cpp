@@ -21,7 +21,6 @@ UTerraDyneSettings::UTerraDyneSettings()
 	GrassDebounceTime = 0.5f;
 	MaxMeshBuildAppliesPerFrame = 2;
 	MaxCollisionUpdatesPerFrame = 1;
-	bEnableGPUBrushes = true;
 	NavigationDirtyDebounceTime = 0.5f;
 	MaxPendingNavigationDirtyAreas = 32;
 

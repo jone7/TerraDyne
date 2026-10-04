@@ -273,7 +273,7 @@ bool FTerraDyneChunkMaterialBindingTest::RunTest(const FString& Parameters)
 
 	if (!Chunk->IsUsingGPU())
 	{
-		AddInfo(TEXT("GPU terrain path unavailable under the current automation RHI; validating material bindings with CPU fallback."));
+		AddInfo(TEXT("CPU-only adaptation: validating material bindings independently of brush compute."));
 	}
 	TestNotNull("Height RT created", Chunk->HeightRT.Get());
 	TestNotNull("Weight texture created", Chunk->WeightTexture.Get());
@@ -333,7 +333,7 @@ bool FTerraDyneChunkSerializationSanitizesResolutionTest::RunTest(const FString&
 	SourceChunk->GridCoordinate = FIntPoint::ZeroValue;
 	SourceChunk->WorldSize = 1000.0f;
 	SourceChunk->ChunkSizeWorldUnits = 1000.0f;
-	SourceChunk->Initialize(128, 1000.0f);
+	SourceChunk->InitializeChunk(FIntPoint::ZeroValue, 1000.0f, 128, nullptr);
 
 	const int32 TrueResolution = SourceChunk->Resolution;
 	TestEqual("Source chunk initialized to 128", TrueResolution, 128);
