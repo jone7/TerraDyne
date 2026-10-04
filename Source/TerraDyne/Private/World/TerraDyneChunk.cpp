@@ -1193,12 +1193,14 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 				const int32 TL = (Y + 1) * Resolution + X;
 				const int32 TR = TL + 1;
 
-				// 沿源 Landscape 的反对角线细分，保留原始三角平面。
-				const int32 T0 = Mesh.AppendTriangle(BL, TL, BR);
-				const int32 T1 = Mesh.AppendTriangle(BR, TL, TR);
+				// 原地形派生沿 Landscape 主对角线；普通 TerraDyne 保留原拓扑。
+                const UE::Geometry::FIndex3i First=bSourceLandscapeTopology ? UE::Geometry::FIndex3i(BL,TR,BR) : UE::Geometry::FIndex3i(BL,TL,BR);
+                const UE::Geometry::FIndex3i Second=bSourceLandscapeTopology ? UE::Geometry::FIndex3i(BL,TL,TR) : UE::Geometry::FIndex3i(BR,TL,TR);
+                const int32 T0 = Mesh.AppendTriangle(First);
+                const int32 T1 = Mesh.AppendTriangle(Second);
 				if (T0 >= 0)
 				{
-					const UE::Geometry::FIndex3i TriElements(BL, TL, BR);
+					const UE::Geometry::FIndex3i TriElements=First;
 					UVOverlay->SetTriangle(T0, TriElements);
 					WeightUVOverlay->SetTriangle(T0, TriElements);
 					ShoreUVOverlay->SetTriangle(T0, TriElements);
@@ -1207,7 +1209,7 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 				}
 				if (T1 >= 0)
 				{
-					const UE::Geometry::FIndex3i TriElements(BR, TL, TR);
+					const UE::Geometry::FIndex3i TriElements=Second;
 					UVOverlay->SetTriangle(T1, TriElements);
 					WeightUVOverlay->SetTriangle(T1, TriElements);
 					ShoreUVOverlay->SetTriangle(T1, TriElements);

@@ -17,6 +17,8 @@ class TERRADYNE_API ATerraDyneChunk : public AActor
 	friend class FTerraDyneChunkMeshBuildTask;
 
 public:
+    /** Landscape 派生块沿源对角线组网，普通 TerraDyne 块保持原拓扑。 */
+    bool bSourceLandscapeTopology=false;
 	/** 最近请求的高度网格已安装后，调用方才可交接源地形碰撞。 */
 	bool IsSurfaceReadyForHandoff() const { return !bMeshDirty && !bMeshBuildInFlight && PendingMeshBuildSerial == INDEX_NONE; }
 	// Cooker 可注入异步碰撞交接组件，普通 TerraDyne 仍使用默认组件。
