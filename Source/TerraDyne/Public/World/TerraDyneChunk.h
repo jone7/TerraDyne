@@ -17,6 +17,12 @@ class TERRADYNE_API ATerraDyneChunk : public AActor
 	friend class FTerraDyneChunkMeshBuildTask;
 
 public:
+    /** 从同一高度缓冲生成顶点和法线，离线作业不必创建Chunk或物理组件。 */
+    static void BuildHeightfieldSamples(const TArray<float>& HeightSamples, int32 InResolution,
+        float InWorldSize, float InZScale, TArray<FVector3d>& Positions, TArray<FVector3f>& Normals);
+    /** 返回一个格子的原有对角线拓扑，编辑器和物理网格共用。 */
+    static void GetHeightfieldCellTriangles(int32 X, int32 Y, int32 InResolution,
+        bool bLandscapeTopology, FIntVector& First, FIntVector& Second);
     /** Landscape 派生块沿源对角线组网，普通 TerraDyne 块保持原拓扑。 */
     bool bSourceLandscapeTopology=false;
 	/** 最近请求的高度网格已安装后，调用方才可交接源地形碰撞。 */

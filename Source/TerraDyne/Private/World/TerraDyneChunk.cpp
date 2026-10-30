@@ -86,7 +86,7 @@ static void ApplyTerrainMaterialParameters(
 }
 
 /** 从高度生成朝上的地形法线，碰撞和显示共用同一顶点坐标。 */
-static void BuildTerrainSurfaceSamples(
+void ATerraDyneChunk::BuildHeightfieldSamples(
 	const TArray<float>& HeightSamples,
 	int32 Resolution,
 	float WorldSize,
@@ -465,7 +465,7 @@ public:
 	{
 		TArray<FVector3d> VertexPositions;
 		TArray<FVector3f> VertexNormals;
-		::BuildTerrainSurfaceSamples(HeightSnapshot, Resolution, WorldSize, ZScale, VertexPositions, VertexNormals);
+		ATerraDyneChunk::BuildHeightfieldSamples(HeightSnapshot, Resolution, WorldSize, ZScale, VertexPositions, VertexNormals);
 		if (NormalSnapshot.Num() == VertexNormals.Num()) VertexNormals = MoveTemp(NormalSnapshot);
 
 		const TWeakObjectPtr<ATerraDyneChunk> CapturedChunk = TargetChunk;
@@ -1132,8 +1132,17 @@ void ATerraDyneChunk::BuildTerrainSurfaceSamples(
 	TArray<FVector3d>& OutVertexPositions,
 	TArray<FVector3f>& OutVertexNormals) const
 {
-	::BuildTerrainSurfaceSamples(HeightBuffer, Resolution, WorldSize, ZScale, OutVertexPositions, OutVertexNormals);
+	BuildHeightfieldSamples(HeightBuffer, Resolution, WorldSize, ZScale, OutVertexPositions, OutVertexNormals);
 	if (SurfaceNormals.Num() == OutVertexNormals.Num()) OutVertexNormals = SurfaceNormals;
+}
+
+/** 原有两种对角线规则按值输出，不创建网格或碰撞。 */
+void ATerraDyneChunk::GetHeightfieldCellTriangles(int32 X, int32 Y, int32 InResolution,
+    bool bLandscapeTopology, FIntVector& First, FIntVector& Second)
+{
+    const int32 BL=Y*InResolution+X, BR=BL+1, TL=(Y+1)*InResolution+X, TR=TL+1;
+    First=bLandscapeTopology ? FIntVector(BL,TR,BR) : FIntVector(BL,TL,BR);
+    Second=bLandscapeTopology ? FIntVector(BL,TL,TR) : FIntVector(BR,TL,TR);
 }
 
 /** UV0 保留源纹理，UV1 保留源权重，UV2 承载独立岸色；切线基与 Landscape 相同。 */
@@ -1188,14 +1197,11 @@ void ATerraDyneChunk::InitializeTerrainMeshTopology(
 		{
 			for (int32 X = 0; X < Resolution - 1; ++X)
 			{
-				const int32 BL = Y * Resolution + X;
-				const int32 BR = BL + 1;
-				const int32 TL = (Y + 1) * Resolution + X;
-				const int32 TR = TL + 1;
 
 				// 原地形派生沿 Landscape 主对角线；普通 TerraDyne 保留原拓扑。
-                const UE::Geometry::FIndex3i First=bSourceLandscapeTopology ? UE::Geometry::FIndex3i(BL,TR,BR) : UE::Geometry::FIndex3i(BL,TL,BR);
-                const UE::Geometry::FIndex3i Second=bSourceLandscapeTopology ? UE::Geometry::FIndex3i(BL,TL,TR) : UE::Geometry::FIndex3i(BR,TL,TR);
+                FIntVector A,B;
+                GetHeightfieldCellTriangles(X,Y,Resolution,bSourceLandscapeTopology,A,B);
+                const UE::Geometry::FIndex3i First(A.X,A.Y,A.Z), Second(B.X,B.Y,B.Z);
                 const int32 T0 = Mesh.AppendTriangle(First);
                 const int32 T1 = Mesh.AppendTriangle(Second);
 				if (T0 >= 0)
@@ -1256,7 +1262,9 @@ void ATerraDyneChunk::UpdateTerrainMeshSurface(
 			}
 		}
 	},
-	EDynamicMeshChangeType::DeformationEdit,
+	// 显示后处理器使用不同拓扑，不能走按源顶点序号更新RenderProxy的快速路径。
+    DynamicMeshComp->GetRenderMesh()!=DynamicMeshComp->GetMesh()
+        ? EDynamicMeshChangeType::GeneralEdit : EDynamicMeshChangeType::DeformationEdit,
 	EDynamicMeshAttributeChangeFlags::VertexPositions |
 	EDynamicMeshAttributeChangeFlags::NormalsTangents);
 }
