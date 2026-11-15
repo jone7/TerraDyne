@@ -40,8 +40,8 @@ void ACookerTerrainTrialController::BeginPlay()
 void ACookerTerrainTrialController::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
-    APawn* Pawn = GetPawn();
-    if (!Pawn) return;
+    APawn* ControlledPawn = GetPawn();
+    if (!ControlledPawn) return;
     if (IsInputKeyDown(EKeys::RightMouseButton))
     {
         float DeltaX = 0.0f;
@@ -52,11 +52,11 @@ void ACookerTerrainTrialController::Tick(float DeltaSeconds)
         Rotation.Pitch = FMath::Clamp(Rotation.Pitch - DeltaY * 0.15f, -85.0, -5.0);
         SetControlRotation(Rotation);
     }
-    Pawn->SetActorRotation(GetControlRotation());
+    ControlledPawn->SetActorRotation(GetControlRotation());
     const FRotator YawRotation(0.0, GetControlRotation().Yaw, 0.0);
-    Pawn->AddMovementInput(YawRotation.Vector(), float(IsInputKeyDown(EKeys::W)) - float(IsInputKeyDown(EKeys::S)));
-    Pawn->AddMovementInput(FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y), float(IsInputKeyDown(EKeys::D)) - float(IsInputKeyDown(EKeys::A)));
-    Pawn->AddMovementInput(FVector::UpVector, float(IsInputKeyDown(EKeys::E)) - float(IsInputKeyDown(EKeys::Q)));
+    ControlledPawn->AddMovementInput(YawRotation.Vector(), float(IsInputKeyDown(EKeys::W)) - float(IsInputKeyDown(EKeys::S)));
+    ControlledPawn->AddMovementInput(FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y), float(IsInputKeyDown(EKeys::D)) - float(IsInputKeyDown(EKeys::A)));
+    ControlledPawn->AddMovementInput(FVector::UpVector, float(IsInputKeyDown(EKeys::E)) - float(IsInputKeyDown(EKeys::Q)));
 }
 
 // 使用独立相机和插件控制器，正式地图继续使用自己的 GameMode。
