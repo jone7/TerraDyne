@@ -10,7 +10,7 @@
   "DocsURL": "https://www.gregorigin.com",
   "MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/terradyne",
   "SupportURL": "mailto:andras@gregorigin.com",
-  "EngineVersion": "5.8.0",
+  "EngineVersion": "5.9.0",
   "CanContainContent": true,
   "IsBetaVersion": false,
   "IsExperimentalVersion": false,
@@ -21,7 +21,8 @@
       "Type": "Runtime",
       "LoadingPhase": "Default",
       "PlatformAllowList": [
-        "Win64"
+        "Win64",
+        "Wasm"
       ]
     },
     {
